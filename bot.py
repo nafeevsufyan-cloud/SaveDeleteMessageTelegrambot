@@ -39,7 +39,7 @@ BOT_TOKEN    = os.environ["BOT_TOKEN"]
 ADMIN_ID     = int(os.environ["ADMIN_ID"])
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BOT_USERNAME = os.getenv("BOT_USERNAME", "SaveDeleteMessageTelegrambot")
-GROQ_MODEL   = "llama-3.3-70b-versatile"   # лучшая бесплатная модель Groq
+GROQ_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"  # мультимодальная, бесплатная, видит фото
 
 # Сколько звёзд за что
 PREMIUM_MONTHLY_STARS = 50
@@ -187,12 +187,52 @@ SYSTEM_PROMPT = (
 )
 
 
-async def groq_chat(uid: int, user_msg: str) -> str:
+async def _get_image_base64(bot: Bot, file_id: str) -> Optional[str]:
+    """Скачивает фото из Telegram и возвращает base64 строку."""
+    try:
+        file = await bot.get_file(file_id)
+        url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status == 200:
+                    import base64
+                    data = await resp.read()
+                    return base64.b64encode(data).decode("utf-8")
+    except Exception as e:
+        log.warning(f"Image download: {e}")
+    return None
+
+
+async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None) -> str:
+    """
+    Отправляет сообщение в Groq.
+    image_base64 — опционально, если пользователь отправил фото.
+    Llama 4 Scout понимает изображения нативно.
+    """
     history = ai_history.setdefault(uid, [])
-    history.append({"role": "user", "content": user_msg})
-    # Держим последние 20 сообщений (10 пар вопрос/ответ)
-    if len(history) > 20:
-        ai_history[uid] = history[-20:]
+
+    # Формируем контент текущего сообщения
+    if image_base64:
+        # Multimodal: текст + фото
+        content = [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{image_base64}"
+                }
+            },
+            {
+                "type": "text",
+                "text": user_msg if user_msg else "Опиши что на фото."
+            }
+        ]
+    else:
+        content = user_msg
+
+    history.append({"role": "user", "content": content})
+    # Держим последние 10 пар (история с фото весит много)
+    if len(history) > 10:
+        ai_history[uid] = history[-10:]
         history = ai_history[uid]
 
     payload = {
@@ -210,19 +250,20 @@ async def groq_chat(uid: int, user_msg: str) -> str:
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=aiohttp.ClientTimeout(total=45),
             ) as resp:
                 raw = await resp.text()
                 try:
                     import json as _json
                     data = _json.loads(raw)
                 except Exception:
-                    log.error(f"Groq non-JSON response (status {resp.status}): {raw[:200]}")
+                    log.error(f"Groq non-JSON (status {resp.status}): {raw[:300]}")
                     return "⚠️ ИИ временно недоступен — попробуй позже."
                 if "choices" not in data:
                     log.error(f"Groq unexpected: {data}")
                     return "⚠️ ИИ вернул неожиданный ответ — попробуй ещё раз."
                 reply = data["choices"][0]["message"]["content"].strip()
+                # В историю кладём только текст ответа (без base64)
                 ai_history[uid].append({"role": "assistant", "content": reply})
                 return reply
     except asyncio.TimeoutError:
@@ -346,26 +387,41 @@ async def on_ai_inline(msg: Message):
     if not msg.from_user or msg.from_user.id != owner_id:
         return
 
-    question = msg.text[msg.text.index(" ") + 1:].strip()
+    # Текст после ".ai "
+    raw_text = msg.text or msg.caption or ""
+    question = raw_text[raw_text.index(" ") + 1:].strip() if " " in raw_text else ""
 
-    # Шаг 1: редактируем → "думает..."
+    # Шаг 1: редактируем → "ожидание..." с мигающим эффектом (~7 сек)
     ok = await _business_edit_message(
         msg.business_connection_id, msg.chat.id, msg.message_id,
-        "⏳ ИИ думает..."
+        "⏳ Ожидание ответа..."
     )
     if not ok:
         return
 
-    # Шаг 2: получаем ответ
-    answer = await groq_chat(owner_id, question)
+    await asyncio.sleep(2)
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "⏳ Ожидание ответа..")
+    await asyncio.sleep(2)
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "⏳ Ожидание ответа...")
+    await asyncio.sleep(2)
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "⏳ Ожидание ответа..")
+    await asyncio.sleep(1)
 
-    # Шаг 3: редактируем → ответ + подпись
+    # Шаг 2: если есть фото — скачиваем
+    image_b64 = None
+    if msg.photo:
+        image_b64 = await _get_image_base64(bot, msg.photo[-1].file_id)
+
+    # Шаг 3: получаем ответ (с фото или без)
+    answer = await groq_chat(owner_id, question or "Опиши что на фото.", image_base64=image_b64)
+
+    # Шаг 4: редактируем → ответ + подпись
     result_text = f"{html_escape(answer)}\n\n— @{BOT_USERNAME}"
     await _business_edit_message(
         msg.business_connection_id, msg.chat.id, msg.message_id,
         result_text
     )
-    log.info(f"🤖 .ai done owner={owner_id} chat={msg.chat.id}")
+    log.info(f"🤖 .ai done owner={owner_id} chat={msg.chat.id} with_photo={image_b64 is not None}")
 
 
 # ══════════════════════════════════════════════════════
@@ -568,7 +624,7 @@ async def cb_ai_open(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.edit_text(
         f"🤖 <b>ИИ-ассистент</b>\n{LINE}\n"
-        f"Модель: <b>Llama 3.3 · 70B</b>\n"
+        f"Модель: <b>Llama 4 Scout · Vision</b>\n"
         f"Лимит: <b>∞ (бесплатно)</b>\n\n"
         "Пиши что угодно — отвечу быстро 🚀",
         reply_markup=kb_ai(),
@@ -577,12 +633,30 @@ async def cb_ai_open(call: CallbackQuery, state: FSMContext):
 
 @dp.message(S.ai_chat)
 async def ai_msg(msg: Message, state: FSMContext):
-    if not msg.text:
-        await msg.answer("⚠️ Отправь текстовое сообщение.")
+    uid = msg.from_user.id
+
+    # Принимаем текст, фото (с подписью или без), или фото + текст
+    has_photo = bool(msg.photo)
+    has_text  = bool(msg.text or msg.caption)
+
+    if not has_text and not has_photo:
+        await msg.answer("⚠️ Отправь текст или фото (можно фото с подписью).")
         return
 
+    text_content = msg.text or msg.caption or ""
+
     thinking = await msg.answer("⏳ Думаю...")
-    reply = await groq_chat(msg.from_user.id, msg.text)
+
+    image_b64 = None
+    if has_photo:
+        # Берём лучшее качество (последний элемент)
+        file_id = msg.photo[-1].file_id
+        image_b64 = await _get_image_base64(bot, file_id)
+        if image_b64 is None:
+            await thinking.edit_text("⚠️ Не смог загрузить фото — попробуй ещё раз.")
+            return
+
+    reply = await groq_chat(uid, text_content, image_base64=image_b64)
     await thinking.delete()
     await msg.answer(f"🤖 {html_escape(reply)}", reply_markup=kb_ai())
 
@@ -925,7 +999,7 @@ async def main():
         await bot.send_message(
             ADMIN_ID,
             f"✅ <b>Бот запущен</b> · v3.0 · SQLite · Railway\n"
-            f"🤖 Модель: {GROQ_MODEL}"
+            f"🤖 Модель: Llama 4 Scout (Vision)"
         )
     except Exception:
         pass
