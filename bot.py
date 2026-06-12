@@ -312,8 +312,14 @@ async def on_ai_inline(msg: Message):
         log.error(f"get_business_connection (.ai): {e}")
         return
 
-    # Реагируем только на сообщения самого владельца аккаунта
+    # Логируем для отладки
+    from_id = msg.from_user.id if msg.from_user else None
+    log.info(f".ai debug: from_id={from_id} owner_id={owner_id} chat={msg.chat.id}")
+
+    # Сообщения от владельца: from_user.id == owner_id
+    # Если не совпадает — это собеседник написал .ai, игнорируем
     if not msg.from_user or msg.from_user.id != owner_id:
+        log.warning(f".ai skip: from_id={from_id} != owner_id={owner_id}")
         return
 
     # Извлекаем вопрос (всё после ".ai ")
