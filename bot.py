@@ -1,12 +1,13 @@
 """
 ╔══════════════════════════════════════════════════════╗
-║       SavedMessages Bot  —  Elite v2.0              ║
+║       SavedMessages Bot  —  Elite v3.0              ║
 ║   Telegram Business · SQLite · Groq · Stars · Rly   ║
 ╚══════════════════════════════════════════════════════╝
 """
 import asyncio
 import logging
 import os
+import re
 from datetime import date, timedelta
 from typing import Optional
 
@@ -37,11 +38,11 @@ BOT_TOKEN    = os.environ["BOT_TOKEN"]
 ADMIN_ID     = int(os.environ["ADMIN_ID"])
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BOT_USERNAME = os.getenv("BOT_USERNAME", "SaveDeleteMessageTelegrambot")
-GROQ_MODEL   = "llama-3.1-8b-instant"
+GROQ_MODEL   = "llama-3.3-70b-versatile"   # лучшая бесплатная модель Groq
 
 # Сколько звёзд за что
-PREMIUM_MONTHLY_STARS = 50   # 1 месяц premium
-DONOR_BADGE_MIN       = 100  # минимум звёзд для значка + premium
+PREMIUM_MONTHLY_STARS = 50
+DONOR_BADGE_MIN       = 100
 
 # ══════════════════════════════════════════════════════
 #  LOGGING
@@ -59,7 +60,7 @@ log = logging.getLogger("bot")
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp  = Dispatcher(storage=MemoryStorage())
 
-# in-memory кэш истории ИИ (не нужно в БД, сбрасывается при рестарте)
+# in-memory кэш истории ИИ
 ai_history: dict[int, list] = {}
 
 
@@ -67,8 +68,8 @@ ai_history: dict[int, list] = {}
 #  FSM
 # ══════════════════════════════════════════════════════
 class S(StatesGroup):
-    ai_chat    = State()
-    ai_search  = State()   # поиск по кэшу (premium)
+    ai_chat   = State()
+    ai_search = State()
 
 
 # ══════════════════════════════════════════════════════
@@ -93,11 +94,16 @@ MEDIA_MAP = {
 
 
 def premium_badge(is_prem: bool, donor: bool) -> str:
-    if donor:
-        return "💎"
-    if is_prem:
-        return "⭐"
+    if donor:  return "💎"
+    if is_prem: return "⭐"
     return ""
+
+
+def fmt_sender(from_name: str, username: str) -> str:
+    """Красиво форматирует имя + username отправителя."""
+    if username:
+        return f"{from_name} ({username})"
+    return from_name
 
 
 # ══════════════════════════════════════════════════════
@@ -109,20 +115,20 @@ def kb_main(uid: int, is_prem: bool) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="🛡 Панель администратора", callback_data="adm")])
     rows += [
         [
-            InlineKeyboardButton(text="📋 Сохранённые",  callback_data="show_all"),
-            InlineKeyboardButton(text="📊 Статистика",   callback_data="stats"),
+            InlineKeyboardButton(text="📋 Сохранённые",   callback_data="show_all"),
+            InlineKeyboardButton(text="📊 Статистика",    callback_data="stats"),
         ],
         [
-            InlineKeyboardButton(text="👥 Рефералы",    callback_data="referrals"),
-            InlineKeyboardButton(text="🗑 Очистить кэш", callback_data="clear_cache"),
+            InlineKeyboardButton(text="👥 Рефералы",      callback_data="referrals"),
+            InlineKeyboardButton(text="🗑 Очистить кэш",  callback_data="clear_cache"),
         ],
     ]
     if is_prem:
         rows.append([InlineKeyboardButton(text="🔍 Поиск по кэшу", callback_data="search")])
     rows += [
-        [InlineKeyboardButton(text="◈  Чат с ИИ", callback_data="ai_open")],
-        [InlineKeyboardButton(text="💝 Premium · 50⭐/мес", callback_data="premium_info")],
-        [InlineKeyboardButton(text="❓ Как подключить", callback_data="howto")],
+        [InlineKeyboardButton(text="◈  Чат с ИИ",             callback_data="ai_open")],
+        [InlineKeyboardButton(text="💝 Premium · 50⭐/мес",    callback_data="premium_info")],
+        [InlineKeyboardButton(text="❓ Как подключить",        callback_data="howto")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -136,17 +142,15 @@ def kb_back(target: str = "menu") -> InlineKeyboardMarkup:
 def kb_deleted(msg_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Понял",     callback_data=f"ack_{msg_id}"),
-            InlineKeyboardButton(text="🗑 Из кэша",   callback_data=f"del_{msg_id}"),
+            InlineKeyboardButton(text="✅ Понял",           callback_data=f"ack_{msg_id}"),
+            InlineKeyboardButton(text="🗑 Из кэша",         callback_data=f"del_{msg_id}"),
         ],
-        [InlineKeyboardButton(text="📋 Все сохранённые", callback_data="show_all")],
+        [InlineKeyboardButton(text="📋 Все сохранённые",   callback_data="show_all")],
     ])
 
 
-def kb_ai(calls_left: int | str) -> InlineKeyboardMarkup:
-    label = f"Запросов сегодня: {calls_left}" if isinstance(calls_left, int) else calls_left
+def kb_ai() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💬 {label}", callback_data="noop")],
         [
             InlineKeyboardButton(text="🗑 Очистить историю", callback_data="ai_clear"),
             InlineKeyboardButton(text="✕ Выйти",             callback_data="ai_exit"),
@@ -173,39 +177,49 @@ def kb_admin() -> InlineKeyboardMarkup:
 
 
 # ══════════════════════════════════════════════════════
-#  GROQ AI
+#  GROQ AI  (без лимитов — Groq бесплатный)
 # ══════════════════════════════════════════════════════
 SYSTEM_PROMPT = (
     "Ты умный ассистент внутри Telegram-бота SavedMessages. "
-    "Отвечай чётко, без лишней воды. Язык — язык пользователя."
+    "Отвечай чётко, без лишней воды. Язык — язык пользователя. "
+    "Будь дружелюбным и полезным."
 )
 
 
 async def groq_chat(uid: int, user_msg: str) -> str:
     history = ai_history.setdefault(uid, [])
     history.append({"role": "user", "content": user_msg})
-    if len(history) > 14:
-        ai_history[uid] = history[-14:]
+    # Держим последние 20 сообщений (10 пар вопрос/ответ)
+    if len(history) > 20:
+        ai_history[uid] = history[-20:]
         history = ai_history[uid]
 
     payload = {
         "model": GROQ_MODEL,
         "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + history,
-        "max_tokens": 1024,
+        "max_tokens": 2048,
         "temperature": 0.7,
     }
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 data = await resp.json()
+                if "choices" not in data:
+                    log.error(f"Groq unexpected: {data}")
+                    return "⚠️ ИИ вернул неожиданный ответ — попробуй ещё раз."
                 reply = data["choices"][0]["message"]["content"].strip()
                 ai_history[uid].append({"role": "assistant", "content": reply})
                 return reply
+    except asyncio.TimeoutError:
+        return "⚠️ ИИ не ответил вовремя — попробуй позже."
     except Exception as e:
         log.error(f"Groq: {e}")
         return "⚠️ ИИ временно недоступен — попробуй позже."
@@ -221,7 +235,6 @@ async def cmd_start(msg: Message, state: FSMContext):
     name  = msg.from_user.full_name or "—"
     uname = msg.from_user.username or ""
 
-    # Регистрация / обновление
     referrer_id: Optional[int] = None
     parts = msg.text.split()
     if len(parts) > 1 and parts[1].startswith("ref_"):
@@ -235,7 +248,6 @@ async def cmd_start(msg: Message, state: FSMContext):
     existing = await db.get_user(uid)
     await db.upsert_user(uid, uname, name, referrer_id if not existing else None)
 
-    # Уведомление рефереру
     if not existing and referrer_id:
         try:
             await bot.send_message(
@@ -249,11 +261,11 @@ async def cmd_start(msg: Message, state: FSMContext):
     is_prem = await db.is_premium(uid)
     badge   = "⭐ " if is_prem else ""
     await msg.answer(
-        f"👁 <b>SavedMessages Bot</b> {badge}\n{LINE}\n"
+        f"👁 <b>SavedMessages Bot</b> {badge}v3.0\n{LINE}\n"
         "Твой личный детектив в <b>Telegram Business</b>.\n"
-        "Перехватываю <b>все</b> удалённые сообщения.\n\n"
-        "<b>Бесплатно:</b> перехват ∞ · кэш 20 · ИИ 5/день\n"
-        "<b>Premium 50⭐:</b> кэш 200 · ИИ ∞ · поиск по кэшу\n\n"
+        "Перехватываю <b>все</b> удалённые и изменённые сообщения.\n\n"
+        "<b>Бесплатно:</b> перехват ∞ · кэш 20 · ИИ ∞\n"
+        "<b>Premium 50⭐:</b> кэш 200 · поиск по кэшу\n\n"
         f"🔗 Реферальная ссылка:\n<code>{ref_link(uid)}</code>",
         reply_markup=kb_main(uid, is_prem),
     )
@@ -273,12 +285,81 @@ async def cmd_admin(msg: Message):
 
 
 # ══════════════════════════════════════════════════════
+#  .ai КОМАНДА В БИЗНЕС-ЧАТЕ
+#  Пользователь пишет: .ai вопрос
+#  Бот редактирует сообщение: ⏳ → ответ + подпись
+# ══════════════════════════════════════════════════════
+@dp.business_message(F.text.regexp(r"^\.ai\s+.+", re.IGNORECASE))
+async def on_ai_inline(msg: Message):
+    """
+    Работает только от владельца бизнес-аккаунта (не от собеседника).
+    Редактирует сообщение прямо в чате: ждёт → ответ ИИ → подпись бота.
+    """
+    if not msg.business_connection_id:
+        return
+
+    try:
+        conn = await bot.get_business_connection(msg.business_connection_id)
+        owner_id = conn.user.id
+    except Exception as e:
+        log.error(f"get_business_connection (.ai): {e}")
+        return
+
+    # Реагируем только на сообщения самого владельца аккаунта
+    if not msg.from_user or msg.from_user.id != owner_id:
+        return
+
+    # Извлекаем вопрос (всё после ".ai ")
+    question = msg.text[msg.text.index(" ") + 1:].strip()
+
+    # Шаг 1: редактируем на "думает..."
+    try:
+        await bot.edit_message_text(
+            text=f"⏳ ИИ думает...",
+            business_connection_id=msg.business_connection_id,
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+        )
+    except Exception as e:
+        log.warning(f".ai edit step1: {e}")
+        return
+
+    # Шаг 2: получаем ответ от Groq
+    answer = await groq_chat(owner_id, question)
+
+    # Шаг 3: редактируем на ответ + подпись бота
+    result_text = f"{answer}\n\n@{BOT_USERNAME}"
+    try:
+        await bot.edit_message_text(
+            text=result_text,
+            business_connection_id=msg.business_connection_id,
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+        )
+    except Exception as e:
+        log.warning(f".ai edit step2: {e}")
+
+    log.info(f"🤖 .ai answered for owner={owner_id} in chat={msg.chat.id}")
+
+
+# ══════════════════════════════════════════════════════
 #  КЭШИРОВАНИЕ БИЗНЕС-СООБЩЕНИЙ
+#  FIX: owner_id = business_connection_id → user.id
 # ══════════════════════════════════════════════════════
 @dp.business_message()
 async def on_business_msg(msg: Message):
-    owner_id = msg.chat.id
-    if not owner_id:
+    """
+    Правильный owner_id: получаем через business_connection,
+    чтобы совпадал с тем, что приходит в on_deleted.
+    """
+    if not msg.business_connection_id:
+        return
+
+    try:
+        conn = await bot.get_business_connection(msg.business_connection_id)
+        owner_id = conn.user.id
+    except Exception as e:
+        log.error(f"get_business_connection (save): {e}")
         return
 
     media_type = "💬 Текст"
@@ -304,18 +385,87 @@ async def on_business_msg(msg: Message):
 
 
 # ══════════════════════════════════════════════════════
+#  ИЗМЕНЁННЫЕ БИЗНЕС-СООБЩЕНИЯ
+# ══════════════════════════════════════════════════════
+@dp.edited_business_message()
+async def on_edited_business_msg(msg: Message):
+    """Ловим изменения — показываем старый текст, сохраняем новый."""
+    if not msg.business_connection_id:
+        return
+
+    try:
+        conn = await bot.get_business_connection(msg.business_connection_id)
+        owner_id = conn.user.id
+    except Exception as e:
+        log.error(f"get_business_connection (edit): {e}")
+        return
+
+    cached = await db.get_message(owner_id, msg.message_id)
+    sender = fmt_sender(
+        msg.from_user.full_name if msg.from_user else "Неизвестно",
+        f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
+    )
+
+    old_text = cached["text"] if cached else None
+    new_text = msg.text or msg.caption or ""
+
+    # Уведомляем владельца
+    text = (
+        f"✏️ <b>Сообщение изменено</b>\n"
+        f"{LINE}\n"
+        f"👤 <b>{sender}</b>\n"
+        f"💬 {msg.chat.title or getattr(msg.chat, 'full_name', None) or 'Личные'}\n"
+        f"🕐 {msg.date.strftime('%d.%m.%Y · %H:%M')}\n"
+        f"{LINE}\n"
+    )
+    if old_text:
+        text += f"📝 <b>Было:</b>\n{old_text}\n\n"
+    else:
+        text += "📝 <b>Было:</b> <i>не в кэше</i>\n\n"
+    text += f"📝 <b>Стало:</b>\n{new_text}"
+
+    try:
+        await bot.send_message(owner_id, text)
+    except Exception as e:
+        log.error(f"send edit notify to owner={owner_id}: {e}")
+
+    # Обновляем кэш новым текстом
+    media_type = "💬 Текст"
+    file_id: Optional[str] = None
+    for attr, label in MEDIA_MAP.items():
+        obj = getattr(msg, attr, None)
+        if obj:
+            media_type = label
+            file_id = obj[-1].file_id if attr == "photo" else (getattr(obj, "file_id", None))
+            break
+
+    await db.save_message(owner_id, {
+        "msg_id":     msg.message_id,
+        "from_name":  msg.from_user.full_name if msg.from_user else "Неизвестно",
+        "username":   f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
+        "chat":       msg.chat.title or getattr(msg.chat, "full_name", None) or "Личные",
+        "date":       msg.date.strftime("%d.%m.%Y · %H:%M"),
+        "text":       new_text,
+        "media_type": media_type,
+        "file_id":    file_id,
+    })
+    log.info(f"✏️ updated msg={msg.message_id} owner={owner_id}")
+
+
+# ══════════════════════════════════════════════════════
 #  УДАЛЁННЫЕ БИЗНЕС-СООБЩЕНИЯ
 # ══════════════════════════════════════════════════════
 async def _send_media(owner_id: int, file_id: str, mt: str):
     try:
-        if "Фото"     in mt: await bot.send_photo(owner_id, file_id)
-        elif "Видео"  in mt: await bot.send_video(owner_id, file_id)
-        elif "Голос"  in mt: await bot.send_voice(owner_id, file_id)
-        elif "Кружок" in mt: await bot.send_video_note(owner_id, file_id)
+        if "Фото"      in mt: await bot.send_photo(owner_id, file_id)
+        elif "Видео"   in mt: await bot.send_video(owner_id, file_id)
+        elif "Голос"   in mt: await bot.send_voice(owner_id, file_id)
+        elif "Кружок"  in mt: await bot.send_video_note(owner_id, file_id)
         elif "Документ" in mt: await bot.send_document(owner_id, file_id)
-        elif "GIF"    in mt: await bot.send_animation(owner_id, file_id)
+        elif "GIF"     in mt: await bot.send_animation(owner_id, file_id)
+        elif "Стикер"  in mt: await bot.send_sticker(owner_id, file_id)
     except Exception as e:
-        log.warning(f"Media: {e}")
+        log.warning(f"Media send: {e}")
 
 
 @dp.deleted_business_messages()
@@ -325,25 +475,41 @@ async def on_deleted(event: BusinessMessagesDeleted):
         conn = await bot.get_business_connection(event.business_connection_id)
         owner_id = conn.user.id
     except Exception as e:
-        log.error(f"get_business_connection: {e}")
+        log.error(f"get_business_connection (delete): {e}")
         return
 
     for msg_id in event.message_ids:
         cached = await db.get_message(owner_id, msg_id)
         if not cached:
             log.warning(f"❓ msg={msg_id} not in cache for owner={owner_id}")
+            # Отправляем даже если не в кэше — хотя бы факт удаления
+            try:
+                await bot.send_message(
+                    owner_id,
+                    f"🗑 <b>Сообщение удалено</b>\n"
+                    f"{LINE}\n"
+                    f"⚠️ Сообщение <b>#{msg_id}</b> было удалено,\n"
+                    "но его не было в кэше — возможно, бот был только что подключён.",
+                )
+            except Exception:
+                pass
             continue
 
+        sender = fmt_sender(cached["from_name"], cached["username"])
+
         text = (
-            "🗑 <b>Удалённое сообщение</b>\n"
+            f"🗑 <b>Удалённое сообщение</b>\n"
             f"{LINE}\n"
-            f"👤 <b>{cached['from_name']}</b> {cached['username']}\n"
-            f"💬 {cached['chat']}\n"
-            f"🕐 {cached['date']}\n"
-            f"📦 {cached['media_type']}"
+            f"👤 Пользователь <b>{sender}</b>\n"
+            f"   удалил сообщение\n"
+            f"{LINE}\n"
+            f"💬 Чат: {cached['chat']}\n"
+            f"🕐 Время: {cached['date']}\n"
+            f"📦 Тип: {cached['media_type']}"
         )
         if cached["text"]:
-            text += f"\n{LINE}\n📝 {cached['text']}"
+            # Красиво оборачиваем текст
+            text += f"\n{LINE}\n📝 <b>Содержимое:</b>\n{cached['text']}"
 
         try:
             await bot.send_message(owner_id, text, reply_markup=kb_deleted(msg_id))
@@ -356,52 +522,31 @@ async def on_deleted(event: BusinessMessagesDeleted):
 
 
 # ══════════════════════════════════════════════════════
-#  ИИ ЧАТ
+#  ИИ ЧАТ  (без лимитов — Groq бесплатный)
 # ══════════════════════════════════════════════════════
 @dp.callback_query(F.data == "ai_open")
 async def cb_ai_open(call: CallbackQuery, state: FSMContext):
-    uid     = call.from_user.id
-    is_prem = await db.is_premium(uid)
-    left    = await db.ai_calls_left(uid)
-    label   = "∞ (Premium)" if is_prem else f"{left}/{db.FREE_AI_LIMIT} сегодня"
-
     await state.set_state(S.ai_chat)
     await call.answer()
     await call.message.edit_text(
         f"🤖 <b>ИИ-ассистент</b>\n{LINE}\n"
-        f"Модель: <b>Llama 3.1 · 8B Instant</b>\n"
-        f"Лимит: <b>{label}</b>\n"
-        "Пиши что угодно — отвечу быстро.",
-        reply_markup=kb_ai(label),
+        f"Модель: <b>Llama 3.3 · 70B</b>\n"
+        f"Лимит: <b>∞ (бесплатно)</b>\n\n"
+        "Пиши что угодно — отвечу быстро 🚀",
+        reply_markup=kb_ai(),
     )
 
 
 @dp.message(S.ai_chat)
 async def ai_msg(msg: Message, state: FSMContext):
-    uid = msg.from_user.id
     if not msg.text:
         await msg.answer("⚠️ Отправь текстовое сообщение.")
         return
 
-    if not await db.ai_allowed(uid):
-        is_prem = await db.is_premium(uid)
-        await msg.answer(
-            f"⛔ <b>Лимит исчерпан</b>\n{LINE}\n"
-            f"Бесплатно: {db.FREE_AI_LIMIT} запросов/день\n"
-            "Купи <b>Premium 50⭐</b> — лимит станет безлимитным.",
-            reply_markup=kb_premium(),
-        )
-        return
-
-    thinking = await msg.answer("⏳")
-    await db.increment_ai_calls(uid)
-    reply = await groq_chat(uid, msg.text)
+    thinking = await msg.answer("⏳ Думаю...")
+    reply = await groq_chat(msg.from_user.id, msg.text)
     await thinking.delete()
-
-    left  = await db.ai_calls_left(uid)
-    is_prem = await db.is_premium(uid)
-    label = "∞ (Premium)" if is_prem else f"{left}/{db.FREE_AI_LIMIT} сегодня"
-    await msg.answer(f"🤖 {reply}", reply_markup=kb_ai(label))
+    await msg.answer(f"🤖 {reply}", reply_markup=kb_ai())
 
 
 @dp.callback_query(F.data == "ai_clear")
@@ -434,7 +579,7 @@ async def cb_search(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.edit_text(
         f"🔍 <b>Поиск по кэшу</b>\n{LINE}\n"
-        "Введи имя, @username или ключевое слово из текста:",
+        "Введи имя, @username или ключевое слово:",
         reply_markup=kb_back("menu"),
     )
 
@@ -454,7 +599,7 @@ async def search_msg(msg: Message, state: FSMContext):
         return
     lines = []
     for m in results[:15]:
-        preview = (m["text"][:40] + "…") if len(m["text"]) > 40 else m["text"] or m["media_type"]
+        preview = (m["text"][:40] + "…") if len(m["text"] or "") > 40 else (m["text"] or m["media_type"])
         lines.append(f"▪ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
     is_prem = await db.is_premium(uid)
     await msg.answer(
@@ -491,8 +636,11 @@ async def cb_howto(call: CallbackQuery):
         "1️⃣ Открой <b>Настройки Telegram</b>\n"
         "2️⃣ Перейди в <b>Telegram Business</b>\n"
         "3️⃣ Нажми <b>Автоматизация чатов</b>\n"
-        f"4️⃣ Выбери <code>@{BOT_USERNAME}</code>\n{LINE}\n"
-        "✅ Готово! Бот перехватывает удалённые сообщения.",
+        f"4️⃣ Выбери <code>@{BOT_USERNAME}</code>\n"
+        "5️⃣ Включи <b>Доступ к сообщениям</b>\n"
+        f"{LINE}\n"
+        "✅ Готово! Бот перехватывает удалённые\n"
+        "и изменённые сообщения в реальном времени.",
         reply_markup=kb_back("menu"),
     )
 
@@ -504,10 +652,10 @@ async def cb_referrals(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text(
         f"👥 <b>Реферальная программа</b>\n{LINE}\n"
-        f"Пригласи друга!\n\n"
+        f"Пригласи друга — помоги проекту расти!\n\n"
         f"🔗 Твоя ссылка:\n<code>{ref_link(uid)}</code>\n\n"
         f"🤝 Приглашено: <b>{refs}</b>\n\n"
-        "Бот бесплатен для всех — твои рефералы помогают\n"
+        "Бот бесплатен для всех — рефералы помогают\n"
         "развивать проект и снижать серверные расходы.",
         reply_markup=kb_back("menu"),
     )
@@ -515,25 +663,23 @@ async def cb_referrals(call: CallbackQuery):
 
 @dp.callback_query(F.data == "stats")
 async def cb_stats(call: CallbackQuery):
-    uid      = call.from_user.id
-    is_prem  = await db.is_premium(uid)
-    cached   = await db.count_messages(uid)
-    refs     = await db.count_referrals(uid)
-    left     = await db.ai_calls_left(uid)
-    user     = await db.get_user(uid)
-    badge    = premium_badge(is_prem, bool(user and user.get("donor_badge")))
+    uid     = call.from_user.id
+    is_prem = await db.is_premium(uid)
+    cached  = await db.count_messages(uid)
+    refs    = await db.count_referrals(uid)
+    user    = await db.get_user(uid)
+    badge   = premium_badge(is_prem, bool(user and user.get("donor_badge")))
     prem_txt = user["premium_until"] if user and user.get("premium_until") else "нет"
 
     await call.answer()
     await call.message.edit_text(
         f"📊 <b>Твоя статистика</b> {badge}\n{LINE}\n"
-        f"💾 В кэше:          <b>{cached}</b>\n"
-        f"👥 Рефералов:       <b>{refs}</b>\n"
-        f"🤖 ИИ сегодня:      <b>{left if not is_prem else '∞'}</b>\n"
-        f"⭐ Premium до:       <b>{prem_txt}</b>\n"
+        f"💾 В кэше:       <b>{cached}</b>\n"
+        f"👥 Рефералов:    <b>{refs}</b>\n"
+        f"🤖 ИИ:           <b>∞ (бесплатно)</b>\n"
+        f"⭐ Premium до:   <b>{prem_txt}</b>\n"
         f"{LINE}\n"
-        f"Лимит кэша:  {'200 (premium)' if is_prem else '20 (free)'}\n"
-        f"Лимит ИИ:   {'∞ (premium)' if is_prem else f'{db.FREE_AI_LIMIT}/день (free)'}",
+        f"Лимит кэша: {'200 (premium)' if is_prem else '20 (free)'}",
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -554,7 +700,7 @@ async def cb_show_all(call: CallbackQuery):
     is_prem = await db.is_premium(uid)
     lines = []
     for m in messages:
-        preview = (m["text"][:40] + "…") if len(m["text"]) > 40 else m["text"] or m["media_type"]
+        preview = (m["text"][:40] + "…") if len(m["text"] or "") > 40 else (m["text"] or m["media_type"])
         lines.append(f"▪ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
     await call.answer()
     await call.message.edit_text(
@@ -586,12 +732,11 @@ async def cb_premium_info(call: CallbackQuery):
     await call.message.edit_text(
         f"⭐ <b>Premium — что даёт?</b>\n{LINE}\n"
         "🆓 <b>Бесплатно навсегда:</b>\n"
-        "  • Перехват удалённых — безлимитно\n"
+        "  • Перехват удалённых и изменённых — ∞\n"
         "  • Кэш: 20 сообщений\n"
-        "  • ИИ: 5 запросов в день\n\n"
+        "  • ИИ: безлимитно\n\n"
         "⭐ <b>Premium · 50 звёзд/месяц:</b>\n"
         "  • Кэш: 200 сообщений\n"
-        "  • ИИ: безлимитно\n"
         "  • Поиск по всему кэшу\n\n"
         "💎 <b>Донат 100⭐+ (единоразово):</b>\n"
         "  • Значок 💎 в статистике\n"
@@ -603,7 +748,7 @@ async def cb_premium_info(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("pay_"))
 async def cb_pay(call: CallbackQuery):
-    parts = call.data.split("_")  # pay_premium_50 или pay_donate_100
+    parts = call.data.split("_")
     kind  = parts[1]
     stars = int(parts[2])
 
@@ -634,13 +779,12 @@ async def pre_checkout(query: PreCheckoutQuery):
 async def on_payment(msg: Message):
     uid     = msg.from_user.id
     stars   = msg.successful_payment.total_amount
-    payload = msg.successful_payment.invoice_payload  # premium_50 / donate_100
+    payload = msg.successful_payment.invoice_payload
 
     await db.save_payment(uid, stars, payload)
     kind = payload.split("_")[0]
 
     if kind == "premium":
-        # Продляем (или устанавливаем) premium
         user    = await db.get_user(uid)
         current = user["premium_until"] if user and user.get("premium_until") else None
         if current and date.fromisoformat(current) >= date.today():
@@ -651,10 +795,9 @@ async def on_payment(msg: Message):
         text = (
             f"⭐ <b>Premium активирован!</b>\n{LINE}\n"
             f"Действует до: <b>{new_date.strftime('%d.%m.%Y')}</b>\n"
-            "Кэш расширен до 200 · ИИ без лимита · Поиск включён."
+            "Кэш расширен до 200 · Поиск включён."
         )
     else:
-        # Донат
         if stars >= DONOR_BADGE_MIN:
             await db.set_donor_badge(uid)
             bonus_date = date.today() + timedelta(days=30)
@@ -710,11 +853,10 @@ async def cb_adm(call: CallbackQuery, state: FSMContext):
 async def cb_adm_users(call: CallbackQuery):
     if not _is_admin(call): return
     ids   = await db.all_user_ids()
-    total = len(ids)
     await call.answer()
     await call.message.edit_text(
         f"👥 <b>Пользователи</b>\n{LINE}\n"
-        f"Всего: <b>{total}</b>",
+        f"Всего: <b>{len(ids)}</b>",
         reply_markup=kb_admin(),
     )
 
@@ -740,11 +882,12 @@ async def cb_adm_stats(call: CallbackQuery):
 # ══════════════════════════════════════════════════════
 async def main():
     await db.init_db()
-    log.info("🚀 SavedMessages Bot v2.0 запускается...")
+    log.info("🚀 SavedMessages Bot v3.0 запускается...")
     try:
         await bot.send_message(
             ADMIN_ID,
-            f"✅ <b>Бот запущен</b> · v2.0 · SQLite · Railway"
+            f"✅ <b>Бот запущен</b> · v3.0 · SQLite · Railway\n"
+            f"🤖 Модель: {GROQ_MODEL}"
         )
     except Exception:
         pass
