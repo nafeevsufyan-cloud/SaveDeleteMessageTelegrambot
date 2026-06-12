@@ -64,6 +64,10 @@ dp  = Dispatcher(storage=MemoryStorage())
 # in-memory кэш истории ИИ
 ai_history: dict[int, list] = {}
 
+# Последнее уведомление (deleted/edited) для каждого owner_id
+# owner_id → message_id уведомления бота
+last_notify_msg: dict[int, int] = {}
+
 
 # ══════════════════════════════════════════════════════
 #  FSM
@@ -105,6 +109,30 @@ def fmt_sender(from_name: str, username: str) -> str:
     if username:
         return f"{from_name} ({username})"
     return from_name
+
+
+async def _send_notify(owner_id: int, text: str, reply_markup=None) -> Optional[int]:
+    """
+    Отправляет уведомление об удалённом/изменённом сообщении,
+    предварительно удаляя предыдущее уведомление (чтобы не засорять чат).
+    Возвращает message_id нового уведомления.
+    """
+    # Удаляем старое уведомление если есть
+    old_id = last_notify_msg.get(owner_id)
+    if old_id:
+        try:
+            await bot.delete_message(owner_id, old_id)
+        except Exception:
+            pass  # уже удалено или недоступно
+        last_notify_msg.pop(owner_id, None)
+
+    try:
+        sent = await bot.send_message(owner_id, text, reply_markup=reply_markup)
+        last_notify_msg[owner_id] = sent.message_id
+        return sent.message_id
+    except Exception as e:
+        log.error(f"send notify to owner={owner_id}: {e}")
+        return None
 
 
 # ══════════════════════════════════════════════════════
@@ -425,6 +453,48 @@ async def on_ai_inline(msg: Message):
 
 
 # ══════════════════════════════════════════════════════
+#  .ai КОМАНДА В ГРУППАХ И КАНАЛАХ
+#  Работает когда бот добавлен в группу/канал.
+#  Пишешь: .ai вопрос  — бот отвечает в том же чате.
+# ══════════════════════════════════════════════════════
+@dp.message(F.text.regexp(r"(?i)^\.ai\s+.+"), F.chat.type.in_({"group", "supergroup", "channel"}))
+async def on_ai_group(msg: Message):
+    """
+    .ai в группах/каналах — бот отвечает обычным сообщением в том же чате.
+    """
+    if not msg.from_user:
+        return
+
+    uid = msg.from_user.id
+    raw_text = msg.text or msg.caption or ""
+    question = raw_text[raw_text.index(" ") + 1:].strip() if " " in raw_text else ""
+    if not question:
+        return
+
+    # Регистрируем пользователя если ещё нет
+    await db.upsert_user(uid, msg.from_user.username or "", msg.from_user.full_name or "")
+
+    thinking = await msg.reply("⏳ Думаю...")
+
+    image_b64 = None
+    if msg.photo:
+        image_b64 = await _get_image_base64(bot, msg.photo[-1].file_id)
+
+    answer = await groq_chat(uid, question, image_base64=image_b64)
+
+    try:
+        await thinking.edit_text(f"🤖 {html_escape(answer)}")
+    except Exception:
+        try:
+            await thinking.delete()
+            await msg.reply(f"🤖 {html_escape(answer)}")
+        except Exception as e:
+            log.error(f"ai_group reply: {e}")
+
+    log.info(f"🤖 .ai group chat={msg.chat.id} user={uid}")
+
+
+# ══════════════════════════════════════════════════════
 #  КЭШИРОВАНИЕ БИЗНЕС-СООБЩЕНИЙ
 #  FIX: owner_id = business_connection_id → user.id
 # ══════════════════════════════════════════════════════
@@ -518,10 +588,7 @@ async def on_edited_business_msg(msg: Message):
         else:
             notify += "📝 <b>Было:</b> <i>не в кэше</i>\n\n"
         notify += f"📝 <b>Стало:</b>\n{html_escape(new_text)}"
-        try:
-            await bot.send_message(owner_id, notify)
-        except Exception as e:
-            log.error(f"send edit notify to owner={owner_id}: {e}")
+        await _send_notify(owner_id, notify)
 
     # В любом случае обновляем кэш новым содержимым
     media_type = "💬 Текст"
@@ -577,16 +644,13 @@ async def on_deleted(event: BusinessMessagesDeleted):
         if not cached:
             log.warning(f"❓ msg={msg_id} not in cache for owner={owner_id}")
             # Отправляем даже если не в кэше — хотя бы факт удаления
-            try:
-                await bot.send_message(
-                    owner_id,
-                    f"🗑 <b>Сообщение удалено</b>\n"
-                    f"{LINE}\n"
-                    f"⚠️ Сообщение <b>#{msg_id}</b> было удалено,\n"
-                    "но его не было в кэше — возможно, бот был только что подключён.",
-                )
-            except Exception:
-                pass
+            await _send_notify(
+                owner_id,
+                f"🗑 <b>Сообщение удалено</b>\n"
+                f"{LINE}\n"
+                f"⚠️ Сообщение <b>#{msg_id}</b> было удалено,\n"
+                "но его не было в кэше — возможно, бот был только что подключён.",
+            )
             continue
 
         sender = fmt_sender(cached["from_name"], cached["username"])
@@ -605,10 +669,8 @@ async def on_deleted(event: BusinessMessagesDeleted):
             # Красиво оборачиваем текст
             text += f"\n{LINE}\n📝 <b>Содержимое:</b>\n{cached['text']}"
 
-        try:
-            await bot.send_message(owner_id, text, reply_markup=kb_deleted(msg_id))
-        except Exception as e:
-            log.error(f"send to owner={owner_id}: {e}")
+        sent_id = await _send_notify(owner_id, text, reply_markup=kb_deleted(msg_id))
+        if sent_id is None:
             continue
 
         if cached["file_id"]:
