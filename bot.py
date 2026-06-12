@@ -68,6 +68,10 @@ ai_history: dict[int, list] = {}
 # owner_id → message_id уведомления бота
 last_notify_msg: dict[int, int] = {}
 
+# Главное меню-сообщение бота для каждого пользователя (редактируется вместо отправки нового)
+# uid → message_id главного сообщения
+home_msg: dict[int, int] = {}
+
 
 # ══════════════════════════════════════════════════════
 #  FSM
@@ -109,6 +113,29 @@ def fmt_sender(from_name: str, username: str) -> str:
     if username:
         return f"{from_name} ({username})"
     return from_name
+
+
+async def _show_home(uid: int, text: str, reply_markup, target_msg: "Message | None" = None):
+    """
+    Показывает главное меню, редактируя уже существующее сообщение если возможно,
+    иначе отправляет новое и запоминает его id.
+    target_msg — сообщение пользователя (для отправки нового если нет home).
+    """
+    existing_id = home_msg.get(uid)
+    if existing_id and target_msg:
+        try:
+            await bot.edit_message_text(
+                text, chat_id=uid, message_id=existing_id,
+                reply_markup=reply_markup, parse_mode="HTML"
+            )
+            return
+        except Exception:
+            pass  # сообщение удалено — отправим новое
+    if target_msg:
+        sent = await target_msg.answer(text, reply_markup=reply_markup)
+    else:
+        sent = await bot.send_message(uid, text, reply_markup=reply_markup)
+    home_msg[uid] = sent.message_id
 
 
 async def _send_notify(owner_id: int, text: str, reply_markup=None) -> Optional[int]:
@@ -336,15 +363,15 @@ async def cmd_start(msg: Message, state: FSMContext):
 
     is_prem = await db.is_premium(uid)
     badge   = "⭐ " if is_prem else ""
-    await msg.answer(
+    home_text = (
         f"👁 <b>SavedMessages Bot</b> {badge}v3.0\n{LINE}\n"
         "Твой личный детектив в <b>Telegram Business</b>.\n"
         "Перехватываю <b>все</b> удалённые и изменённые сообщения.\n\n"
         "<b>Бесплатно:</b> перехват ∞ · кэш 20 · ИИ ∞\n"
         "<b>Premium 50⭐:</b> кэш 200 · поиск по кэшу\n\n"
-        f"🔗 Реферальная ссылка:\n<code>{ref_link(uid)}</code>",
-        reply_markup=kb_main(uid, is_prem),
+        f"🔗 Реферальная ссылка:\n<code>{ref_link(uid)}</code>"
     )
+    await _show_home(uid, home_text, kb_main(uid, is_prem), msg)
 
 
 # ══════════════════════════════════════════════════════
@@ -653,6 +680,15 @@ async def on_deleted(event: BusinessMessagesDeleted):
             )
             continue
 
+        # Не уведомляем о своих собственных удалённых сообщениях
+        user_info = await db.get_user(owner_id)
+        owner_name = user_info["full_name"] if user_info else ""
+        if cached["from_name"] == owner_name and cached["username"] in (
+            f"@{user_info['username']}" if user_info and user_info.get('username') else "", ""
+        ):
+            log.info(f"⏭ skip own msg={msg_id} owner={owner_id}")
+            continue
+
         sender = fmt_sender(cached["from_name"], cached["username"])
 
         text = (
@@ -805,17 +841,58 @@ async def cb_noop(call: CallbackQuery):
 @dp.callback_query(F.data == "howto")
 async def cb_howto(call: CallbackQuery):
     await call.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👤 Профиль (Business)", callback_data="howto_profile")],
+        [InlineKeyboardButton(text="📢 Группа / Канал",     callback_data="howto_group")],
+        [InlineKeyboardButton(text="◀ Назад",               callback_data="back_menu")],
+    ])
     await call.message.edit_text(
-        f"📌 <b>Подключение за 2 минуты</b>\n{LINE}\n"
+        f"❓ <b>Как подключить бота?</b>\n{LINE}\n"
+        "Выбери тип подключения:",
+        reply_markup=kb,
+    )
+
+
+@dp.callback_query(F.data == "howto_profile")
+async def cb_howto_profile(call: CallbackQuery):
+    await call.answer()
+    await call.message.edit_text(
+        f"👤 <b>Подключение к профилю (Business)</b>\n{LINE}\n"
+        "Для этого нужен <b>Telegram Business</b> (платная подписка).\n\n"
         "1️⃣ Открой <b>Настройки Telegram</b>\n"
         "2️⃣ Перейди в <b>Telegram Business</b>\n"
         "3️⃣ Нажми <b>Автоматизация чатов</b>\n"
         f"4️⃣ Выбери <code>@{BOT_USERNAME}</code>\n"
         "5️⃣ Включи <b>Доступ к сообщениям</b>\n"
         f"{LINE}\n"
-        "✅ Готово! Бот перехватывает удалённые\n"
-        "и изменённые сообщения в реальном времени.",
-        reply_markup=kb_back("menu"),
+        "✅ Бот перехватывает <b>все</b> удалённые\n"
+        "и изменённые сообщения в твоих личных чатах.\n\n"
+        "💡 <i>Твои собственные удалённые сообщения\n"
+        "бот не присылает — только чужие.</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀ Назад", callback_data="howto")],
+        ]),
+    )
+
+
+@dp.callback_query(F.data == "howto_group")
+async def cb_howto_group(call: CallbackQuery):
+    await call.answer()
+    await call.message.edit_text(
+        f"📢 <b>Подключение к группе / каналу</b>\n{LINE}\n"
+        "Бот работает бесплатно — Telegram Business не нужен!\n\n"
+        "1️⃣ Добавь <code>@{BOT_USERNAME}</code> в группу или канал\n"
+        "2️⃣ Дай боту права <b>Администратора</b>\n"
+        "   (нужно: читать сообщения)\n"
+        "3️⃣ Для групп: отключи Privacy Mode через\n"
+        "   @BotFather → /setprivacy → Disabled\n"
+        f"{LINE}\n"
+        "✅ Готово! Теперь в группе/канале можно\n"
+        "писать <code>.ai вопрос</code> — бот ответит прямо там.\n\n"
+        "💡 <i>Пример: </i><code>.ai объясни квантовую физику</code>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀ Назад", callback_data="howto")],
+        ]),
     )
 
 
