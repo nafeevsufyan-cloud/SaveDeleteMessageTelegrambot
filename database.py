@@ -37,6 +37,7 @@ async def init_db():
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             owner_id    INTEGER NOT NULL,
             msg_id      INTEGER NOT NULL,
+            sender_id   INTEGER,
             from_name   TEXT,
             username    TEXT,
             chat        TEXT,
@@ -57,9 +58,19 @@ async def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_messages_owner ON messages(owner_id);
+        -- migration: add sender_id if not exists
+
         CREATE INDEX IF NOT EXISTS idx_messages_owner_msg ON messages(owner_id, msg_id);
         """)
         await db.commit()
+    # Миграция: добавляем sender_id если ещё нет (для существующих БД)
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute("ALTER TABLE messages ADD COLUMN sender_id INTEGER")
+            await db.commit()
+            log.info("🔧 Миграция: добавлена колонка sender_id")
+        except Exception:
+            pass  # уже есть
     log.info("✅ DB инициализирована")
 
 
@@ -191,10 +202,10 @@ async def save_message(owner_id: int, msg: dict):
         # Вставка / игнор дублей
         await db.execute("""
             INSERT OR IGNORE INTO messages
-              (owner_id, msg_id, from_name, username, chat, date, text, media_type, file_id, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+              (owner_id, msg_id, sender_id, from_name, username, chat, date, text, media_type, file_id, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            owner_id, msg["msg_id"], msg["from_name"], msg["username"],
+            owner_id, msg["msg_id"], msg.get("sender_id"), msg["from_name"], msg["username"],
             msg["chat"], msg["date"], msg["text"],
             msg["media_type"], msg["file_id"], now
         ))

@@ -556,6 +556,7 @@ async def on_business_msg(msg: Message):
 
     await db.save_message(owner_id, {
         "msg_id":     msg.message_id,
+        "sender_id":  msg.from_user.id if msg.from_user else None,
         "from_name":  msg.from_user.full_name if msg.from_user else "Неизвестно",
         "username":   f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
         "chat":       msg.chat.title or getattr(msg.chat, "full_name", None) or "Личные",
@@ -595,7 +596,11 @@ async def on_edited_business_msg(msg: Message):
         or new_text.strip() == "⏳ ИИ думает..."
     )
 
-    if not is_bot_edit:
+    # Не уведомляем если владелец редактирует своё собственное сообщение
+    sender_id = msg.from_user.id if msg.from_user else None
+    is_owner_edit = (sender_id == owner_id)
+
+    if not is_bot_edit and not is_owner_edit:
         cached = await db.get_message(owner_id, msg.message_id)
         old_text = cached["text"] if cached else None
         sender = fmt_sender(
@@ -629,6 +634,7 @@ async def on_edited_business_msg(msg: Message):
 
     await db.save_message(owner_id, {
         "msg_id":     msg.message_id,
+        "sender_id":  msg.from_user.id if msg.from_user else None,
         "from_name":  msg.from_user.full_name if msg.from_user else "Неизвестно",
         "username":   f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
         "chat":       msg.chat.title or getattr(msg.chat, "full_name", None) or "Личные",
@@ -681,12 +687,8 @@ async def on_deleted(event: BusinessMessagesDeleted):
             continue
 
         # Не уведомляем о своих собственных удалённых сообщениях
-        user_info = await db.get_user(owner_id)
-        owner_name = user_info["full_name"] if user_info else ""
-        if cached["from_name"] == owner_name and cached["username"] in (
-            f"@{user_info['username']}" if user_info and user_info.get('username') else "", ""
-        ):
-            log.info(f"⏭ skip own msg={msg_id} owner={owner_id}")
+        if cached.get("sender_id") == owner_id:
+            log.info(f"⏭ skip own deleted msg={msg_id} owner={owner_id}")
             continue
 
         sender = fmt_sender(cached["from_name"], cached["username"])
