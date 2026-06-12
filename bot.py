@@ -289,7 +289,7 @@ async def cmd_admin(msg: Message):
 #  Пользователь пишет: .ai вопрос
 #  Бот редактирует сообщение: ⏳ → ответ + подпись
 # ══════════════════════════════════════════════════════
-@dp.business_message(F.text.regexp(r"^\.ai\s+.+", re.IGNORECASE))
+@dp.business_message(F.text.regexp(r"(?i)^\.ai\s+.+"))
 async def on_ai_inline(msg: Message):
     """
     Работает только от владельца бизнес-аккаунта (не от собеседника).
