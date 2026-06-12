@@ -29,6 +29,7 @@ from aiogram.types import (
     PreCheckoutQuery,
 )
 
+from html import escape as html_escape
 import database as db
 
 # ══════════════════════════════════════════════════════
@@ -211,7 +212,13 @@ async def groq_chat(uid: int, user_msg: str) -> str:
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
-                data = await resp.json()
+                raw = await resp.text()
+                try:
+                    import json as _json
+                    data = _json.loads(raw)
+                except Exception:
+                    log.error(f"Groq non-JSON response (status {resp.status}): {raw[:200]}")
+                    return "⚠️ ИИ временно недоступен — попробуй позже."
                 if "choices" not in data:
                     log.error(f"Groq unexpected: {data}")
                     return "⚠️ ИИ вернул неожиданный ответ — попробуй ещё раз."
@@ -328,7 +335,7 @@ async def on_ai_inline(msg: Message):
     answer = await groq_chat(owner_id, question)
 
     # Шаг 3: редактируем на ответ + подпись бота
-    result_text = f"{answer}\n\n@{BOT_USERNAME}"
+    result_text = f"{html_escape(answer)}\n\n@{BOT_USERNAME}"
     try:
         await bot.edit_message_text(
             text=result_text,
@@ -546,7 +553,7 @@ async def ai_msg(msg: Message, state: FSMContext):
     thinking = await msg.answer("⏳ Думаю...")
     reply = await groq_chat(msg.from_user.id, msg.text)
     await thinking.delete()
-    await msg.answer(f"🤖 {reply}", reply_markup=kb_ai())
+    await msg.answer(f"🤖 {html_escape(reply)}", reply_markup=kb_ai())
 
 
 @dp.callback_query(F.data == "ai_clear")
