@@ -12,6 +12,7 @@ from typing import Optional
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -55,7 +56,7 @@ log = logging.getLogger("bot")
 # ══════════════════════════════════════════════════════
 #  BOT & DISPATCHER
 # ══════════════════════════════════════════════════════
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp  = Dispatcher(storage=MemoryStorage())
 
 # in-memory кэш истории ИИ (не нужно в БД, сбрасывается при рестарте)
