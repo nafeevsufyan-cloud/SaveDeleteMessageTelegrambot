@@ -293,14 +293,44 @@ async def cmd_admin(msg: Message):
 
 # ══════════════════════════════════════════════════════
 #  .ai КОМАНДА В БИЗНЕС-ЧАТЕ
-#  Пользователь пишет: .ai вопрос
-#  Бот редактирует сообщение: ⏳ → ответ + подпись
+#  Пишешь: .ai вопрос
+#  Бот редактирует твоё сообщение: ⏳ → ответ + @бот
 # ══════════════════════════════════════════════════════
+
+AI_PREFIX = ".ai"  # команда (без пробела — регистр игнорируется)
+
+async def _business_edit_message(conn_id: str, chat_id: int, msg_id: int, text: str) -> bool:
+    """
+    Редактирует бизнес-сообщение напрямую через Bot API (HTTP),
+    т.к. aiogram 3.7 не поддерживает business_connection_id в edit_message_text.
+    """
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+    payload = {
+        "business_connection_id": conn_id,
+        "chat_id": chat_id,
+        "message_id": msg_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                data = await resp.json()
+                if not data.get("ok"):
+                    log.warning(f"editMessageText API error: {data.get('description')}")
+                    return False
+                return True
+    except Exception as e:
+        log.warning(f"editMessageText HTTP: {e}")
+        return False
+
+
 @dp.business_message(F.text.regexp(r"(?i)^\.ai\s+.+"))
 async def on_ai_inline(msg: Message):
     """
-    Работает только от владельца бизнес-аккаунта (не от собеседника).
-    Редактирует сообщение прямо в чате: ждёт → ответ ИИ → подпись бота.
+    Только от владельца бизнес-аккаунта.
+    Редактирует сообщение прямо в чате собеседника.
+    Не попадает в кэш и не вызывает уведомление об изменении.
     """
     if not msg.business_connection_id:
         return
@@ -312,47 +342,30 @@ async def on_ai_inline(msg: Message):
         log.error(f"get_business_connection (.ai): {e}")
         return
 
-    # Логируем для отладки
-    from_id = msg.from_user.id if msg.from_user else None
-    log.info(f".ai debug: from_id={from_id} owner_id={owner_id} chat={msg.chat.id}")
-
-    # Сообщения от владельца: from_user.id == owner_id
-    # Если не совпадает — это собеседник написал .ai, игнорируем
+    # Реагируем только на сообщения самого владельца
     if not msg.from_user or msg.from_user.id != owner_id:
-        log.warning(f".ai skip: from_id={from_id} != owner_id={owner_id}")
         return
 
-    # Извлекаем вопрос (всё после ".ai ")
     question = msg.text[msg.text.index(" ") + 1:].strip()
 
-    # Шаг 1: редактируем на "думает..."
-    try:
-        await bot.edit_message_text(
-            text=f"⏳ ИИ думает...",
-            business_connection_id=msg.business_connection_id,
-            chat_id=msg.chat.id,
-            message_id=msg.message_id,
-        )
-    except Exception as e:
-        log.warning(f".ai edit step1: {e}")
+    # Шаг 1: редактируем → "думает..."
+    ok = await _business_edit_message(
+        msg.business_connection_id, msg.chat.id, msg.message_id,
+        "⏳ ИИ думает..."
+    )
+    if not ok:
         return
 
-    # Шаг 2: получаем ответ от Groq
+    # Шаг 2: получаем ответ
     answer = await groq_chat(owner_id, question)
 
-    # Шаг 3: редактируем на ответ + подпись бота
-    result_text = f"{html_escape(answer)}\n\n@{BOT_USERNAME}"
-    try:
-        await bot.edit_message_text(
-            text=result_text,
-            business_connection_id=msg.business_connection_id,
-            chat_id=msg.chat.id,
-            message_id=msg.message_id,
-        )
-    except Exception as e:
-        log.warning(f".ai edit step2: {e}")
-
-    log.info(f"🤖 .ai answered for owner={owner_id} in chat={msg.chat.id}")
+    # Шаг 3: редактируем → ответ + подпись
+    result_text = f"{html_escape(answer)}\n\n— @{BOT_USERNAME}"
+    await _business_edit_message(
+        msg.business_connection_id, msg.chat.id, msg.message_id,
+        result_text
+    )
+    log.info(f"🤖 .ai done owner={owner_id} chat={msg.chat.id}")
 
 
 # ══════════════════════════════════════════════════════
@@ -366,6 +379,10 @@ async def on_business_msg(msg: Message):
     чтобы совпадал с тем, что приходит в on_deleted.
     """
     if not msg.business_connection_id:
+        return
+
+    # Не кэшируем .ai команды — они будут отредактированы в ответ ИИ
+    if msg.text and msg.text.lower().startswith(".ai "):
         return
 
     try:
@@ -402,7 +419,11 @@ async def on_business_msg(msg: Message):
 # ══════════════════════════════════════════════════════
 @dp.edited_business_message()
 async def on_edited_business_msg(msg: Message):
-    """Ловим изменения — показываем старый текст, сохраняем новый."""
+    """
+    Ловим изменения сообщений.
+    Если это .ai ответ бота — тихо обновляем кэш, не уведомляем.
+    Если это реальное изменение — уведомляем владельца было/стало.
+    """
     if not msg.business_connection_id:
         return
 
@@ -413,36 +434,40 @@ async def on_edited_business_msg(msg: Message):
         log.error(f"get_business_connection (edit): {e}")
         return
 
-    cached = await db.get_message(owner_id, msg.message_id)
-    sender = fmt_sender(
-        msg.from_user.full_name if msg.from_user else "Неизвестно",
-        f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
-    )
-
-    old_text = cached["text"] if cached else None
     new_text = msg.text or msg.caption or ""
 
-    # Уведомляем владельца
-    text = (
-        f"✏️ <b>Сообщение изменено</b>\n"
-        f"{LINE}\n"
-        f"👤 <b>{sender}</b>\n"
-        f"💬 {msg.chat.title or getattr(msg.chat, 'full_name', None) or 'Личные'}\n"
-        f"🕐 {msg.date.strftime('%d.%m.%Y · %H:%M')}\n"
-        f"{LINE}\n"
+    # Не уведомляем об изменениях сделанных самим ботом (.ai ответы)
+    is_bot_edit = (
+        f"— @{BOT_USERNAME}" in new_text
+        or new_text.strip() == "⏳ ИИ думает..."
     )
-    if old_text:
-        text += f"📝 <b>Было:</b>\n{old_text}\n\n"
-    else:
-        text += "📝 <b>Было:</b> <i>не в кэше</i>\n\n"
-    text += f"📝 <b>Стало:</b>\n{new_text}"
 
-    try:
-        await bot.send_message(owner_id, text)
-    except Exception as e:
-        log.error(f"send edit notify to owner={owner_id}: {e}")
+    if not is_bot_edit:
+        cached = await db.get_message(owner_id, msg.message_id)
+        old_text = cached["text"] if cached else None
+        sender = fmt_sender(
+            msg.from_user.full_name if msg.from_user else "Неизвестно",
+            f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
+        )
+        notify = (
+            f"✏️ <b>Сообщение изменено</b>\n"
+            f"{LINE}\n"
+            f"👤 <b>{html_escape(sender)}</b>\n"
+            f"💬 {html_escape(msg.chat.title or getattr(msg.chat, 'full_name', None) or 'Личные')}\n"
+            f"🕐 {msg.date.strftime('%d.%m.%Y · %H:%M')}\n"
+            f"{LINE}\n"
+        )
+        if old_text:
+            notify += f"📝 <b>Было:</b>\n{html_escape(old_text)}\n\n"
+        else:
+            notify += "📝 <b>Было:</b> <i>не в кэше</i>\n\n"
+        notify += f"📝 <b>Стало:</b>\n{html_escape(new_text)}"
+        try:
+            await bot.send_message(owner_id, notify)
+        except Exception as e:
+            log.error(f"send edit notify to owner={owner_id}: {e}")
 
-    # Обновляем кэш новым текстом
+    # В любом случае обновляем кэш новым содержимым
     media_type = "💬 Текст"
     file_id: Optional[str] = None
     for attr, label in MEDIA_MAP.items():
@@ -462,7 +487,7 @@ async def on_edited_business_msg(msg: Message):
         "media_type": media_type,
         "file_id":    file_id,
     })
-    log.info(f"✏️ updated msg={msg.message_id} owner={owner_id}")
+    log.info(f"✏️ updated msg={msg.message_id} owner={owner_id} bot_edit={is_bot_edit}")
 
 
 # ══════════════════════════════════════════════════════
