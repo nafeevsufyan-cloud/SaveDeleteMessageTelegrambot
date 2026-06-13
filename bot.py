@@ -77,8 +77,9 @@ home_msg: dict[int, int] = {}
 #  FSM
 # ══════════════════════════════════════════════════════
 class S(StatesGroup):
-    ai_chat   = State()
-    ai_search = State()
+    ai_chat      = State()
+    ai_search    = State()
+    suggest_idea = State()
 
 
 # ══════════════════════════════════════════════════════
@@ -168,68 +169,77 @@ async def _send_notify(owner_id: int, text: str, reply_markup=None) -> Optional[
 def kb_main(uid: int, is_prem: bool) -> InlineKeyboardMarkup:
     rows = []
     if uid == ADMIN_ID:
-        rows.append([InlineKeyboardButton(text="🛡 Панель администратора", callback_data="adm")])
-    rows += [
-        [
-            InlineKeyboardButton(text="📋 Сохранённые",   callback_data="show_all"),
-            InlineKeyboardButton(text="📊 Статистика",    callback_data="stats"),
-        ],
-        [
-            InlineKeyboardButton(text="👥 Рефералы",      callback_data="referrals"),
-            InlineKeyboardButton(text="🗑 Очистить кэш",  callback_data="clear_cache"),
-        ],
-    ]
+        rows.append([InlineKeyboardButton(text="⚙️  Панель администратора", callback_data="adm")])
+    # Блок перехватов
+    rows.append([
+        InlineKeyboardButton(text="📂  Сохранённые",   callback_data="show_all"),
+        InlineKeyboardButton(text="📊  Статистика",    callback_data="stats"),
+    ])
+    # Поиск только для premium
     if is_prem:
-        rows.append([InlineKeyboardButton(text="🔍 Поиск по кэшу", callback_data="search")])
-    rows += [
-        [InlineKeyboardButton(text="◈  Чат с ИИ",             callback_data="ai_open")],
-        [InlineKeyboardButton(text="💝 Premium · 50⭐/мес",    callback_data="premium_info")],
-        [InlineKeyboardButton(text="❓ Как подключить",        callback_data="howto")],
-    ]
+        rows.append([InlineKeyboardButton(text="🔍  Поиск по кэшу", callback_data="search")])
+    # Блок ИИ
+    rows.append([InlineKeyboardButton(text="🤖  Чат с ИИ  —  бесплатно, без лимитов", callback_data="ai_open")])
+    # Блок прочего
+    rows.append([
+        InlineKeyboardButton(text="👥  Рефералы",     callback_data="referrals"),
+        InlineKeyboardButton(text="🗑  Очистить кэш", callback_data="clear_cache"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text="💡  Идеи",         callback_data="suggest_idea"),
+        InlineKeyboardButton(text="❓  Подключение",  callback_data="howto"),
+    ])
+    # Premium CTA
+    if is_prem:
+        rows.append([InlineKeyboardButton(text="⭐  Premium активен  —  продлить", callback_data="premium_info")])
+    else:
+        rows.append([InlineKeyboardButton(text="⭐  Premium · 50 звёзд/мес  —  расширить кэш", callback_data="premium_info")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def kb_back(target: str = "menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀ Назад", callback_data=f"back_{target}")]
+        [InlineKeyboardButton(text="← Назад", callback_data=f"back_{target}")]
     ])
 
 
 def kb_deleted(msg_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Понял",           callback_data=f"ack_{msg_id}"),
-            InlineKeyboardButton(text="🗑 Из кэша",         callback_data=f"del_{msg_id}"),
+            InlineKeyboardButton(text="✅  Понял",            callback_data=f"ack_{msg_id}"),
+            InlineKeyboardButton(text="🗑  Удалить из кэша",  callback_data=f"del_{msg_id}"),
         ],
-        [InlineKeyboardButton(text="💾 Сохранить навсегда", callback_data=f"save_{msg_id}")],
-        [InlineKeyboardButton(text="📋 Все сохранённые",   callback_data="show_all")],
+        [InlineKeyboardButton(text="💾  Сохранить навсегда", callback_data=f"save_{msg_id}")],
+        [InlineKeyboardButton(text="📂  Все сохранённые",    callback_data="show_all")],
     ])
 
 
 def kb_ai() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🗑 Очистить историю", callback_data="ai_clear"),
-            InlineKeyboardButton(text="✕ Выйти",             callback_data="ai_exit"),
+            InlineKeyboardButton(text="🗑  Очистить историю", callback_data="ai_clear"),
+            InlineKeyboardButton(text="✖  Выйти из чата",    callback_data="ai_exit"),
         ],
     ])
 
 
 def kb_premium() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐ Premium · 50 звёзд/мес",  callback_data="pay_premium_50")],
-        [InlineKeyboardButton(text="💎 Донат · 100 звёзд",       callback_data="pay_donate_100")],
-        [InlineKeyboardButton(text="💎 Донат · 200 звёзд",       callback_data="pay_donate_200")],
-        [InlineKeyboardButton(text="💎 Донат · 500 звёзд",       callback_data="pay_donate_500")],
-        [InlineKeyboardButton(text="◀ Назад",                    callback_data="back_menu")],
+        [InlineKeyboardButton(text="⭐  Premium · 50 звёзд — 1 месяц",  callback_data="pay_premium_50")],
+        [InlineKeyboardButton(text="━━━━━━━━━━━━━━━━━━━━━━━━",          callback_data="noop")],
+        [InlineKeyboardButton(text="💎  Донат · 100 звёзд  (+30 дней)", callback_data="pay_donate_100")],
+        [InlineKeyboardButton(text="💎  Донат · 200 звёзд  (+30 дней)", callback_data="pay_donate_200")],
+        [InlineKeyboardButton(text="💎  Донат · 500 звёзд  (+30 дней)", callback_data="pay_donate_500")],
+        [InlineKeyboardButton(text="← Назад",                           callback_data="back_menu")],
     ])
 
 
 def kb_admin() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Пользователи",  callback_data="adm_users")],
-        [InlineKeyboardButton(text="📊 Статистика",    callback_data="adm_stats")],
-        [InlineKeyboardButton(text="◀ Назад",          callback_data="back_menu")],
+        [InlineKeyboardButton(text="👥  Пользователи",    callback_data="adm_users")],
+        [InlineKeyboardButton(text="📊  Статистика",      callback_data="adm_stats")],
+        [InlineKeyboardButton(text="💡  Идеи от юзеров",  callback_data="adm_ideas")],
+        [InlineKeyboardButton(text="← Назад",             callback_data="back_menu")],
     ])
 
 
@@ -398,14 +408,22 @@ async def cmd_start(msg: Message, state: FSMContext):
             pass
 
     is_prem = await db.is_premium(uid)
-    badge   = "⭐ " if is_prem else ""
+    badge   = "⭐" if is_prem else ""
+    status  = "Premium активен" if is_prem else "Бесплатный тариф"
     home_text = (
-        f"👁 <b>SavedMessages Bot</b> {badge}v3.0\n{LINE}\n"
-        "Твой личный детектив в <b>Telegram Business</b>.\n"
-        "Перехватываю <b>все</b> удалённые и изменённые сообщения.\n\n"
-        "<b>Бесплатно:</b> перехват ∞ · кэш 20 · ИИ ∞\n"
-        "<b>Premium 50⭐:</b> кэш 200 · поиск по кэшу\n\n"
-        f"🔗 Реферальная ссылка:\n<code>{ref_link(uid)}</code>"
+        f"👁  <b>SavedMessages Bot</b>  {badge}\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
+        f"Привет, <b>{html_escape(name)}</b> 👋\n\n"
+        "Я перехватываю <b>удалённые и изменённые</b>\n"
+        "сообщения в твоих чатах — мгновенно.\n\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+        f"🔹 Статус:    <b>{status}</b>\n"
+        f"🔹 Перехват:  <b>∞ сообщений</b>\n"
+        f"🔹 Кэш:       <b>{'200' if is_prem else '20'} сообщений</b>\n"
+        f"🔹 ИИ:        <b>бесплатно, без лимитов</b>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
+        f"🔗 Твоя реф. ссылка:\n"
+        f"<code>{ref_link(uid)}</code>"
     )
     await _show_home(uid, home_text, kb_main(uid, is_prem), msg)
 
@@ -955,9 +973,16 @@ async def cb_back(call: CallbackQuery, state: FSMContext):
     await state.clear()
     uid     = call.from_user.id
     is_prem = await db.is_premium(uid)
+    status  = "Premium активен" if is_prem else "Бесплатный тариф"
     await call.answer()
     await call.message.edit_text(
-        f"👁 <b>SavedMessages Bot</b>\n{LINE}\nГлавное меню",
+        f"👁  <b>SavedMessages Bot</b>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
+        f"🔹 Статус:    <b>{status}</b>\n"
+        f"🔹 Перехват:  <b>∞ сообщений</b>\n"
+        f"🔹 Кэш:       <b>{'200' if is_prem else '20'} сообщений</b>\n"
+        f"🔹 ИИ:        <b>бесплатно, без лимитов</b>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>",
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1247,47 +1272,213 @@ async def cb_adm_stats(call: CallbackQuery):
     users   = await db.count_users()
     msgs    = await db.total_messages_all()
     stars   = await db.total_stars()
+    ideas   = await db.count_ideas()
     await call.answer()
     await call.message.edit_text(
         f"📊 <b>Общая статистика</b>\n{LINE}\n"
         f"👥 Пользователей:  <b>{users}</b>\n"
         f"💾 Сообщений в БД: <b>{msgs}</b>\n"
-        f"⭐ Всего звёзд:    <b>{stars}</b>",
+        f"⭐ Всего звёзд:    <b>{stars}</b>\n"
+        f"💡 Идей:           <b>{ideas}</b>",
         reply_markup=kb_admin(),
     )
+
+
+# ══════════════════════════════════════════════════════
+#  ADMIN — ИДЕИ
+# ══════════════════════════════════════════════════════
+@dp.callback_query(F.data == "adm_ideas")
+async def cb_adm_ideas(call: CallbackQuery):
+    if not _is_admin(call): return
+    await call.answer()
+    ideas = await db.get_ideas(30)
+    if not ideas:
+        await call.message.edit_text(
+            f"💡 <b>Идеи от пользователей</b>\n{LINE}\n"
+            "Пока идей нет — расскажи людям о кнопке 😊",
+            reply_markup=kb_admin(),
+        )
+        return
+
+    lines = []
+    for idea in ideas[:10]:  # показываем первые 10
+        uname = f"@{idea['username']}" if idea['username'] else idea['full_name']
+        preview = idea['text'][:80] + ("…" if len(idea['text']) > 80 else "")
+        lines.append(
+            f"<b>#{idea['id']}</b> · {uname}\n"
+            f"   {html_escape(preview)}"
+        )
+
+    kb_rows = []
+    for idea in ideas[:10]:
+        kb_rows.append([InlineKeyboardButton(
+            text=f"🗑 Удалить #{idea['id']}",
+            callback_data=f"adm_del_idea_{idea['id']}"
+        )])
+    kb_rows.append([InlineKeyboardButton(text="🧹  Очистить все идеи", callback_data="adm_clear_ideas")])
+    kb_rows.append([InlineKeyboardButton(text="← Назад", callback_data="adm")])
+
+    await call.message.edit_text(
+        f"💡 <b>Идеи от пользователей</b>  ({len(ideas)} шт.)\n{LINE}\n\n"
+        + "\n\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_del_idea_"))
+async def cb_adm_del_idea(call: CallbackQuery):
+    if not _is_admin(call): return
+    idea_id = int(call.data.split("_")[-1])
+    await db.delete_idea(idea_id)
+    await call.answer(f"🗑 Идея #{idea_id} удалена")
+    # обновляем список
+    await cb_adm_ideas(call)
+
+
+@dp.callback_query(F.data == "adm_clear_ideas")
+async def cb_adm_clear_ideas(call: CallbackQuery):
+    if not _is_admin(call): return
+    await db.clear_ideas()
+    await call.answer("🧹 Все идеи очищены", show_alert=True)
+    await call.message.edit_text(
+        f"💡 <b>Идеи от пользователей</b>\n{LINE}\n"
+        "Список очищен.",
+        reply_markup=kb_admin(),
+    )
+
+
+# ══════════════════════════════════════════════════════
+#  ПРЕДЛОЖИТЬ ИДЕЮ (пользователь)
+# ══════════════════════════════════════════════════════
+@dp.callback_query(F.data == "suggest_idea")
+async def cb_suggest_idea(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.set_state(S.suggest_idea)
+    await call.message.edit_text(
+        f"💡 <b>Предложи идею</b>\n{LINE}\n\n"
+        "Расскажи что бы ты хотел видеть в боте.\n"
+        "Любая идея — полезная функция, улучшение\n"
+        "интерфейса, новая команда — всё приветствуется!\n\n"
+        "✍️ Напиши своё предложение:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✖  Отмена", callback_data="back_menu")]
+        ]),
+    )
+
+
+@dp.message(S.suggest_idea)
+async def on_idea_input(msg: Message, state: FSMContext):
+    uid   = msg.from_user.id
+    text  = msg.text or msg.caption or ""
+    if not text.strip():
+        await msg.answer("⚠️ Напиши текст идеи — пустое сообщение не принято.")
+        return
+
+    await state.clear()
+    await db.save_idea(
+        uid,
+        msg.from_user.username or "",
+        msg.from_user.full_name or "",
+        text.strip()
+    )
+
+    is_prem = await db.is_premium(uid)
+    await msg.answer(
+        f"💡 <b>Спасибо за идею!</b>\n{LINE}\n\n"
+        "Твоё предложение отправлено разработчику.\n"
+        "Лучшие идеи попадают в следующие обновления 🚀\n\n"
+        "Ты помогаешь сделать бот лучше 🖤",
+        reply_markup=kb_main(uid, is_prem),
+    )
+
+    # Уведомляем админа
+    uname = f"@{msg.from_user.username}" if msg.from_user.username else msg.from_user.full_name
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"💡 <b>Новая идея!</b>\n{LINE}\n"
+            f"👤 {uname} (ID: {uid})\n\n"
+            f"💬 {html_escape(text[:500])}",
+        )
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════
 #  ЗАПУСК
 # ══════════════════════════════════════════════════════
 DEVLOG = (
-    "🚀 <b>DevLog · Version 1.01</b>\n"
-    "🤖 Best TG Bots · @SaveDeleteMessageTelegrambot\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "✨ <b>Что нового в этом обновлении:</b>\n\n"
-    "🎙 <b>Голос → Текст</b>\n"
-    "   Удалили голосовое? Бот расшифрует его через ИИ\n"
-    "   и покажет текст. Ничего не потеряешь.\n\n"
-    "💾 <b>Кнопка «Сохранить навсегда»</b>\n"
-    "   Под каждым перехваченным сообщением появилась\n"
-    "   кнопка сохранения. Одним тапом — и оно у тебя\n"
-    "   в чате с ботом навсегда.\n\n"
-    "🖼 <b>Распознавание картинок</b>\n"
-    "   Отправь в чат с ИИ любую картинку — задачу,\n"
-    "   скриншот, фото текста. ИИ разберёт и решит.\n"
-    "   Просто напиши .ai и прикрепи фото!\n\n"
-    "🔕 <b>Фильтр своих сообщений</b>\n"
-    "   Бот больше не уведомляет когда ты сам\n"
-    "   удаляешь или редактируешь свои сообщения.\n\n"
-    "📢 <b>Работа в группах и каналах</b>\n"
-    "   Добавь бота в группу/канал и пиши .ai вопрос\n"
-    "   прямо там — бот ответит в чат.\n\n"
-    "🗑 <b>Умные уведомления</b>\n"
-    "   Старое уведомление удаляется при новом —\n"
-    "   чат не засоряется, всё чисто и удобно.\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "🔥 Бот полностью бесплатный · ИИ без лимитов\n"
-    "👥 Расскажи друзьям — помоги проекту расти!"
+    "👁 <b>SavedMessages Bot</b>  <code>v3.0</code>\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "Привет! Это полный обзор того, что умеет бот.\n"
+    "Если ты здесь впервые — добро пожаловать 🖤\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "🛡 <b>ПЕРЕХВАТ СООБЩЕНИЙ</b>\n\n"
+    "🗑 <b>Удалённые сообщения</b>\n"
+    "   Кто-то удалил сообщение в переписке?\n"
+    "   Бот мгновенно пришлёт тебе его содержимое:\n"
+    "   текст, фото, видео, голосовое, стикер, GIF.\n\n"
+    "✏️ <b>Изменённые сообщения</b>\n"
+    "   Отредактировали сообщение после отправки?\n"
+    "   Увидишь сразу — что <i>было</i> и что <i>стало</i>.\n\n"
+    "🔕 <b>Умный фильтр</b>\n"
+    "   Свои удалённые и изменённые — тишина.\n"
+    "   Только чужие. Никакого спама от самого себя.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "🤖 <b>ИИ АССИСТЕНТ</b>  <i>(бесплатно, без лимитов)</i>\n\n"
+    "💬 <b>Чат с ИИ прямо в боте</b>\n"
+    "   Задай любой вопрос — ИИ ответит чётко и быстро.\n"
+    "   История диалога сохраняется до сброса.\n\n"
+    "🖼 <b>Анализ изображений</b>\n"
+    "   Прикрепи фото — ИИ разберёт, прочитает текст,\n"
+    "   решит задачу или объяснит что на картинке.\n\n"
+    "📢 <b>ИИ в группах и каналах</b>\n"
+    "   Добавь бота в любой чат, напиши:\n"
+    "   <code>.ai вопрос</code> — бот ответит прямо в беседе.\n\n"
+    "⚡ <b>ИИ в бизнес-переписке</b>\n"
+    "   Напиши <code>.ai вопрос</code> прямо в чате с собеседником —\n"
+    "   бот незаметно заменит твоё сообщение ответом.\n\n"
+    "🎙 <b>Расшифровка голосовых</b>\n"
+    "   Удалённое голосовое автоматически расшифруется\n"
+    "   в текст. Whisper AI — точность 95%+.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "💾 <b>КЭШ СООБЩЕНИЙ</b>\n\n"
+    "📋 <b>Хранилище перехватов</b>\n"
+    "   Все перехваченные сообщения хранятся в кэше.\n"
+    "   Бесплатно: 20 штук · Premium: 200 штук.\n\n"
+    "🔍 <b>Поиск по кэшу</b>  <i>(Premium)</i>\n"
+    "   Найди любое сообщение по тексту, имени\n"
+    "   отправителя или юзернейму за секунды.\n\n"
+    "💾 <b>Сохранить навсегда</b>\n"
+    "   Одна кнопка под уведомлением — и сообщение\n"
+    "   останется у тебя навсегда вне зависимости от кэша.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "⭐ <b>PREMIUM</b>  <code>50 звёзд / месяц</code>\n\n"
+    "   • Кэш расширяется с 20 до <b>200</b> сообщений\n"
+    "   • Поиск по всему кэшу\n"
+    "   • Значок ⭐ в статистике\n\n"
+    "💎 <b>ДОНАТ</b>  <code>100+ звёзд</code>\n\n"
+    "   • Значок 💎 навсегда\n"
+    "   • +30 дней Premium в подарок\n"
+    "   • Поддержка независимого проекта 🙏\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "💡 <b>КАК ПОДКЛЮЧИТЬ?</b>\n\n"
+    "   Нужен <b>Telegram Business</b> (или просто добавить\n"
+    "   бота в группу для ИИ-функций).\n"
+    "   В боте есть кнопка <b>«Как подключить»</b> — там\n"
+    "   пошаговая инструкция с картинками.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "🚀 <b>ВПЕРЕДИ — ЕЩЁ БОЛЬШЕ</b>\n\n"
+    "   Бот активно развивается. В планах:\n"
+    "   — Уведомления о скриншотах\n"
+    "   — Статистика активности чатов\n"
+    "   — Экспорт кэша в файл\n"
+    "   — Ещё больше ИИ-возможностей\n\n"
+    "💬 Есть идея? Нажми кнопку <b>«💡 Идеи»</b> в боте.\n"
+    "   Лучшие идеи от вас — уже в следующем обновлении.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "Спасибо что ты здесь. Это только начало 🖤\n"
+    "— Команда <b>SavedMessages Bot</b>"
 )
 
 

@@ -57,6 +57,15 @@ async def init_db():
             created_at  TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS ideas (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL,
+            username    TEXT,
+            full_name   TEXT,
+            text        TEXT NOT NULL,
+            created_at  TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_messages_owner ON messages(owner_id);
         -- migration: add sender_id if not exists
 
@@ -302,4 +311,43 @@ async def save_payment(uid: int, stars: int, payload: str):
 async def total_stars() -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT COALESCE(SUM(stars),0) FROM payments") as cur:
+            return (await cur.fetchone())[0]
+
+
+# ──────────────────────────────────────────────
+#  IDEAS
+# ──────────────────────────────────────────────
+async def save_idea(user_id: int, username: str, full_name: str, text: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO ideas (user_id, username, full_name, text, created_at) VALUES (?,?,?,?,?)",
+            (user_id, username, full_name, text, datetime.now().isoformat())
+        )
+        await db.commit()
+
+
+async def get_ideas(limit: int = 30) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM ideas ORDER BY id DESC LIMIT ?", (limit,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def delete_idea(idea_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM ideas WHERE id=?", (idea_id,))
+        await db.commit()
+
+
+async def clear_ideas():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM ideas")
+        await db.commit()
+
+
+async def count_ideas() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM ideas") as cur:
             return (await cur.fetchone())[0]
