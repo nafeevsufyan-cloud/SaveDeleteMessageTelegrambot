@@ -8,7 +8,7 @@ import asyncio
 import logging
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 from typing import Optional
 
 import aiohttp
@@ -90,6 +90,15 @@ class S(StatesGroup):
 #  HELPERS
 # ══════════════════════════════════════════════════════
 LINE = "▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎"
+
+# Telegram отдаёт время сообщений в UTC — переводим в МСК (UTC+3, без перевода стрелок)
+MSK = timezone(timedelta(hours=3))
+
+
+def fmt_msg_date(dt) -> str:
+    """Форматирует datetime сообщения в МСК (dd.mm.YYYY · HH:MM)."""
+    return dt.astimezone(MSK).strftime("%d.%m.%Y · %H:%M")
+
 
 def ref_link(uid: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
@@ -620,7 +629,7 @@ async def on_business_msg(msg: Message):
         "from_name":  msg.from_user.full_name if msg.from_user else "Неизвестно",
         "username":   f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
         "chat":       msg.chat.title or getattr(msg.chat, "full_name", None) or "Личные",
-        "date":       msg.date.strftime("%d.%m.%Y · %H:%M"),
+        "date":       fmt_msg_date(msg.date),
         "text":       msg.text or msg.caption or "",
         "media_type": media_type,
         "file_id":    file_id,
@@ -672,7 +681,7 @@ async def on_edited_business_msg(msg: Message):
             f"{LINE}\n"
             f"👤 <b>{html_escape(sender)}</b>\n"
             f"◆ {html_escape(msg.chat.title or getattr(msg.chat, 'full_name', None) or 'Личные')}\n"
-            f"◷ {msg.date.strftime('%d.%m.%Y · %H:%M')}\n"
+            f"◷ {fmt_msg_date(msg.date)}\n"
             f"{LINE}\n"
         )
         if old_text:
@@ -698,7 +707,7 @@ async def on_edited_business_msg(msg: Message):
         "from_name":  msg.from_user.full_name if msg.from_user else "Неизвестно",
         "username":   f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
         "chat":       msg.chat.title or getattr(msg.chat, "full_name", None) or "Личные",
-        "date":       msg.date.strftime("%d.%m.%Y · %H:%M"),
+        "date":       fmt_msg_date(msg.date),
         "text":       new_text,
         "media_type": media_type,
         "file_id":    file_id,
