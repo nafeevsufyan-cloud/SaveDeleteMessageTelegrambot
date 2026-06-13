@@ -147,6 +147,18 @@ async def all_user_ids() -> list[int]:
             return [r[0] for r in await cur.fetchall()]
 
 
+async def get_all_users(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Список пользователей с username/full_name/referrer_id, новые сверху."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, username, full_name, referrer_id, joined FROM users "
+            "ORDER BY joined DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
 # ──────────────────────────────────────────────
 #  AI RATE LIMIT  (free = 5 запросов/день)
 # ──────────────────────────────────────────────

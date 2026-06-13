@@ -38,7 +38,7 @@ import database as db
 BOT_TOKEN    = os.environ["BOT_TOKEN"]
 ADMIN_ID     = int(os.environ["ADMIN_ID"])
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-BOT_USERNAME = os.getenv("BOT_USERNAME", "Quiet_Mod_bot")
+BOT_USERNAME = "Quiet_Mod_bot"  # фиксированное имя — не зависит от старой переменной окружения
 GROQ_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"  # мультимодальная, бесплатная, видит фото
 
 # Название бренда (используется в текстах)
@@ -83,6 +83,7 @@ class S(StatesGroup):
     ai_chat      = State()
     ai_search    = State()
     suggest_idea = State()
+    broadcast    = State()
 
 
 # ══════════════════════════════════════════════════════
@@ -242,6 +243,7 @@ def kb_admin() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="◆ Пользователи",   callback_data="adm_users")],
         [InlineKeyboardButton(text="◆ Статистика",     callback_data="adm_stats")],
         [InlineKeyboardButton(text="✦ Предложения",    callback_data="adm_ideas")],
+        [InlineKeyboardButton(text="📣 Сообщение всем", callback_data="adm_broadcast")],
         [InlineKeyboardButton(text="← В меню",         callback_data="back_menu")],
     ])
 
@@ -1258,16 +1260,62 @@ async def cb_adm(call: CallbackQuery, state: FSMContext):
     )
 
 
+USERS_PAGE_SIZE = 10
+
+
+def _fmt_user_line(u: dict) -> str:
+    uname = f"@{u['username']}" if u.get("username") else (u.get("full_name") or "—")
+    if u.get("referrer_id"):
+        source = f"🤝 по приглашению (от ID {u['referrer_id']})"
+    else:
+        source = "🔗 по юзернейму / прямой запуск"
+    return f"<b>{html_escape(uname)}</b>  (ID {u['id']})\n   {source}"
+
+
+async def _render_users_page(page: int) -> tuple[str, InlineKeyboardMarkup]:
+    total = await db.count_users()
+    offset = page * USERS_PAGE_SIZE
+    users = await db.get_all_users(limit=USERS_PAGE_SIZE, offset=offset)
+
+    if not users:
+        text = f"◆ <b>Пользователи</b>\n{LINE}\nВсего: <b>{total}</b>\n\nПусто."
+    else:
+        lines = [_fmt_user_line(u) for u in users]
+        page_count = (total + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE
+        text = (
+            f"◆ <b>Пользователи</b>  ({total})\n{LINE}\n\n"
+            + "\n\n".join(lines)
+            + f"\n\n{LINE}\nСтраница {page + 1} / {max(page_count, 1)}"
+        )
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="← Назад", callback_data=f"adm_users_p{page-1}"))
+    if offset + USERS_PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton(text="Вперёд →", callback_data=f"adm_users_p{page+1}"))
+
+    rows = []
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="← В меню", callback_data="adm")])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.callback_query(F.data == "adm_users")
 async def cb_adm_users(call: CallbackQuery):
     if not _is_admin(call): return
-    ids   = await db.all_user_ids()
     await call.answer()
-    await call.message.edit_text(
-        f"◆ <b>Пользователи</b>\n{LINE}\n"
-        f"Всего: <b>{len(ids)}</b>",
-        reply_markup=kb_admin(),
-    )
+    text, kb = await _render_users_page(0)
+    await call.message.edit_text(text, reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("adm_users_p"))
+async def cb_adm_users_page(call: CallbackQuery):
+    if not _is_admin(call): return
+    page = int(call.data.removeprefix("adm_users_p"))
+    await call.answer()
+    text, kb = await _render_users_page(page)
+    await call.message.edit_text(text, reply_markup=kb)
 
 
 @dp.callback_query(F.data == "adm_stats")
@@ -1347,6 +1395,63 @@ async def cb_adm_clear_ideas(call: CallbackQuery):
     await call.message.edit_text(
         f"✦ <b>Предложения от пользователей</b>\n{LINE}\n"
         "Список очищен.",
+        reply_markup=kb_admin(),
+    )
+
+
+# ══════════════════════════════════════════════════════
+#  СООБЩЕНИЕ ВСЕМ (broadcast)
+# ══════════════════════════════════════════════════════
+@dp.callback_query(F.data == "adm_broadcast")
+async def cb_adm_broadcast(call: CallbackQuery, state: FSMContext):
+    if not _is_admin(call): return
+    await call.answer()
+    await state.set_state(S.broadcast)
+    await call.message.edit_text(
+        f"📣 <b>Сообщение всем пользователям</b>\n{LINE}\n\n"
+        "Отправь сообщение, которое получат <b>все</b>,\n"
+        "кто хоть раз писал /start боту.\n\n"
+        "Поддерживаются текст, фото, видео и другие медиа\n"
+        "с подписью — формат сохранится.\n\n"
+        "✕ Для отмены — нажми кнопку ниже.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✕ Отмена", callback_data="adm")]
+        ]),
+    )
+
+
+@dp.message(S.broadcast)
+async def on_broadcast_input(msg: Message, state: FSMContext):
+    if msg.from_user.id != ADMIN_ID:
+        await state.clear()
+        return
+
+    await state.clear()
+    ids = await db.all_user_ids()
+
+    status = await msg.answer(f"📣 Рассылка начата · 0 / {len(ids)}…")
+
+    ok = 0
+    fail = 0
+    for i, uid in enumerate(ids, start=1):
+        try:
+            await msg.copy_to(chat_id=uid)
+            ok += 1
+        except Exception as e:
+            fail += 1
+            log.warning(f"broadcast to {uid}: {e}")
+        await asyncio.sleep(0.05)  # не спамим Telegram API
+
+        if i % 25 == 0 or i == len(ids):
+            try:
+                await status.edit_text(f"📣 Рассылка идёт · {i} / {len(ids)}…")
+            except Exception:
+                pass
+
+    await status.edit_text(
+        f"📣 <b>Рассылка завершена</b>\n{LINE}\n"
+        f"✔ Доставлено: <b>{ok}</b>\n"
+        f"✕ Не доставлено: <b>{fail}</b>",
         reply_markup=kb_admin(),
     )
 
