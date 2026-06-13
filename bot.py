@@ -67,9 +67,9 @@ dp  = Dispatcher(storage=MemoryStorage())
 # in-memory кэш истории ИИ
 ai_history: dict[int, list] = {}
 
-# Последнее уведомление (deleted/edited) для каждого owner_id
-# owner_id → message_id уведомления бота
-last_notify_msg: dict[int, int] = {}
+# Последняя группа уведомлений (deleted/edited + медиа + расшифровка) на owner_id
+# owner_id → список message_id, которые нужно удалить при следующем уведомлении
+last_notify_msgs: dict[int, list[int]] = {}
 
 # Главное меню-сообщение бота для каждого пользователя (редактируется вместо отправки нового)
 # uid → message_id главного сообщения
