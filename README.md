@@ -1,6 +1,6 @@
-# SavedMessages Bot v2.0
+# Quiet Mod 👁️
 
-Telegram Business бот — перехватывает удалённые сообщения.
+Telegram Business бот — перехватывает удалённые и изменённые сообщения. Чёрный люкс.
 
 ## Структура
 
@@ -21,7 +21,7 @@ railway.toml    # Railway: volume для data/bot.db
 git init
 git add .
 git commit -m "init"
-git remote add origin https://github.com/ТВОЙuser/savedmessages-bot.git
+git remote add origin https://github.com/ТВОЙuser/quiet-mod-bot.git
 git push -u origin main
 ```
 
@@ -35,7 +35,7 @@ git push -u origin main
 | `BOT_TOKEN` | токен от @BotFather |
 | `ADMIN_ID` | твой Telegram ID |
 | `GROQ_API_KEY` | ключ от [console.groq.com](https://console.groq.com) |
-| `BOT_USERNAME` | юзернейм бота без @ |
+| `BOT_USERNAME` | `Quiet_Mod_bot` (без @) |
 
 4. Volumes → Add Volume → Mount path: `/app/data`
    (это сохраняет БД между перезапусками)
@@ -44,7 +44,7 @@ git push -u origin main
 
 ### 3. Проверка
 Напиши `/start` боту — должно прийти приветствие.
-Администратору придёт сообщение `✅ Бот запущен`.
+Администратору придёт сообщение `✔ Бот запущен`.
 
 ---
 
@@ -52,12 +52,12 @@ git push -u origin main
 
 | Уровень | Условие | Возможности |
 |---------|---------|-------------|
-| Free | Всегда | Перехват ∞ · Кэш 20 · ИИ 5/день |
-| Premium | 50⭐/мес | Кэш 200 · ИИ ∞ · Поиск |
-| Донат 100⭐+ | Единоразово | Значок 💎 · Premium 30 дней |
+| Базовый | Всегда | Перехват безлимит · Архив 20 · ИИ безлимит |
+| VIP | 50⭐/мес | Архив 200 · ИИ безлимит · Поиск |
+| Вклад 100⭐+ | Единоразово | Метка ◇ · VIP 30 дней |
 
-**Цель 100⭐/мес:** 2 пользователя premium = 100⭐.
-При реферальной раскрутке — реалистично с первого месяца.
+**Цель 100⭐/мес:** 2 пользователя VIP = 100⭐.
+При раскрутке через приглашения — реалистично с первого месяца.
 
 ---
 

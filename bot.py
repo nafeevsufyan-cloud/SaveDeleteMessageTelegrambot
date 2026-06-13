@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════╗
-║       SavedMessages Bot  —  Elite v3.0              ║
+║              QUIET MOD 👁️  —  Black Luxury           ║
 ║   Telegram Business · SQLite · Groq · Stars · Rly   ║
 ╚══════════════════════════════════════════════════════╝
 """
@@ -38,8 +38,11 @@ import database as db
 BOT_TOKEN    = os.environ["BOT_TOKEN"]
 ADMIN_ID     = int(os.environ["ADMIN_ID"])
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-BOT_USERNAME = os.getenv("BOT_USERNAME", "SaveDeleteMessageTelegrambot")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "Quiet_Mod_bot")
 GROQ_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"  # мультимодальная, бесплатная, видит фото
+
+# Название бренда (используется в текстах)
+BRAND_NAME = "Quiet Mod 👁️"
 
 # Сколько звёзд за что
 PREMIUM_MONTHLY_STARS = 50
@@ -85,7 +88,7 @@ class S(StatesGroup):
 # ══════════════════════════════════════════════════════
 #  HELPERS
 # ══════════════════════════════════════════════════════
-LINE = "━━━━━━━━━━━━━━━━━━━━"
+LINE = "▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎"
 
 def ref_link(uid: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
@@ -104,8 +107,8 @@ MEDIA_MAP = {
 
 
 def premium_badge(is_prem: bool, donor: bool) -> str:
-    if donor:  return "💎"
-    if is_prem: return "⭐"
+    if donor:  return "◇"
+    if is_prem: return "◈"
     return ""
 
 
@@ -169,77 +172,77 @@ async def _send_notify(owner_id: int, text: str, reply_markup=None) -> Optional[
 def kb_main(uid: int, is_prem: bool) -> InlineKeyboardMarkup:
     rows = []
     if uid == ADMIN_ID:
-        rows.append([InlineKeyboardButton(text="⚙️  Панель администратора", callback_data="adm")])
+        rows.append([InlineKeyboardButton(text="🕶 Admin Suite", callback_data="adm")])
     # Блок перехватов
     rows.append([
-        InlineKeyboardButton(text="📂  Сохранённые",   callback_data="show_all"),
-        InlineKeyboardButton(text="📊  Статистика",    callback_data="stats"),
+        InlineKeyboardButton(text="🗃 Архив",     callback_data="show_all"),
+        InlineKeyboardButton(text="◆ Профиль",   callback_data="stats"),
     ])
     # Поиск только для premium
     if is_prem:
-        rows.append([InlineKeyboardButton(text="🔍  Поиск по кэшу", callback_data="search")])
+        rows.append([InlineKeyboardButton(text="🔎 Поиск по архиву", callback_data="search")])
     # Блок ИИ
-    rows.append([InlineKeyboardButton(text="🤖  Чат с ИИ  —  бесплатно, без лимитов", callback_data="ai_open")])
+    rows.append([InlineKeyboardButton(text="🖤 ИИ-консьерж — без лимитов", callback_data="ai_open")])
     # Блок прочего
     rows.append([
-        InlineKeyboardButton(text="👥  Рефералы",     callback_data="referrals"),
-        InlineKeyboardButton(text="🗑  Очистить кэш", callback_data="clear_cache"),
+        InlineKeyboardButton(text="🤝 Приглашения", callback_data="referrals"),
+        InlineKeyboardButton(text="🧹 Очистить",    callback_data="clear_cache"),
     ])
     rows.append([
-        InlineKeyboardButton(text="💡  Идеи",         callback_data="suggest_idea"),
-        InlineKeyboardButton(text="❓  Подключение",  callback_data="howto"),
+        InlineKeyboardButton(text="✦ Предложить",   callback_data="suggest_idea"),
+        InlineKeyboardButton(text="⚙ Подключение",  callback_data="howto"),
     ])
     # Premium CTA
     if is_prem:
-        rows.append([InlineKeyboardButton(text="⭐  Premium активен  —  продлить", callback_data="premium_info")])
+        rows.append([InlineKeyboardButton(text="◈ VIP-статус активен — продлить", callback_data="premium_info")])
     else:
-        rows.append([InlineKeyboardButton(text="⭐  Premium · 50 звёзд/мес  —  расширить кэш", callback_data="premium_info")])
+        rows.append([InlineKeyboardButton(text="◈ VIP · 50⭐/мес — расширить архив", callback_data="premium_info")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def kb_back(target: str = "menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← Назад", callback_data=f"back_{target}")]
+        [InlineKeyboardButton(text="← В меню", callback_data=f"back_{target}")]
     ])
 
 
 def kb_deleted(msg_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅  Понял",            callback_data=f"ack_{msg_id}"),
-            InlineKeyboardButton(text="🗑  Удалить из кэша",  callback_data=f"del_{msg_id}"),
+            InlineKeyboardButton(text="✔ Принято",      callback_data=f"ack_{msg_id}"),
+            InlineKeyboardButton(text="✕ Стереть",      callback_data=f"del_{msg_id}"),
         ],
-        [InlineKeyboardButton(text="💾  Сохранить навсегда", callback_data=f"save_{msg_id}")],
-        [InlineKeyboardButton(text="📂  Все сохранённые",    callback_data="show_all")],
+        [InlineKeyboardButton(text="◆ Сохранить навсегда", callback_data=f"save_{msg_id}")],
+        [InlineKeyboardButton(text="🗃 Весь архив",        callback_data="show_all")],
     ])
 
 
 def kb_ai() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🗑  Очистить историю", callback_data="ai_clear"),
-            InlineKeyboardButton(text="✖  Выйти из чата",    callback_data="ai_exit"),
+            InlineKeyboardButton(text="✕ Сбросить диалог", callback_data="ai_clear"),
+            InlineKeyboardButton(text="← Завершить",       callback_data="ai_exit"),
         ],
     ])
 
 
 def kb_premium() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐  Premium · 50 звёзд — 1 месяц",  callback_data="pay_premium_50")],
-        [InlineKeyboardButton(text="━━━━━━━━━━━━━━━━━━━━━━━━",          callback_data="noop")],
-        [InlineKeyboardButton(text="💎  Донат · 100 звёзд  (+30 дней)", callback_data="pay_donate_100")],
-        [InlineKeyboardButton(text="💎  Донат · 200 звёзд  (+30 дней)", callback_data="pay_donate_200")],
-        [InlineKeyboardButton(text="💎  Донат · 500 звёзд  (+30 дней)", callback_data="pay_donate_500")],
-        [InlineKeyboardButton(text="← Назад",                           callback_data="back_menu")],
+        [InlineKeyboardButton(text="◈ VIP · 50⭐ — 1 месяц",        callback_data="pay_premium_50")],
+        [InlineKeyboardButton(text="▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎",  callback_data="noop")],
+        [InlineKeyboardButton(text="◇ Вклад · 100⭐  (+30 дн. VIP)", callback_data="pay_donate_100")],
+        [InlineKeyboardButton(text="◇ Вклад · 200⭐  (+30 дн. VIP)", callback_data="pay_donate_200")],
+        [InlineKeyboardButton(text="◇ Вклад · 500⭐  (+30 дн. VIP)", callback_data="pay_donate_500")],
+        [InlineKeyboardButton(text="← В меню",                       callback_data="back_menu")],
     ])
 
 
 def kb_admin() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥  Пользователи",    callback_data="adm_users")],
-        [InlineKeyboardButton(text="📊  Статистика",      callback_data="adm_stats")],
-        [InlineKeyboardButton(text="💡  Идеи от юзеров",  callback_data="adm_ideas")],
-        [InlineKeyboardButton(text="← Назад",             callback_data="back_menu")],
+        [InlineKeyboardButton(text="◆ Пользователи",   callback_data="adm_users")],
+        [InlineKeyboardButton(text="◆ Статистика",     callback_data="adm_stats")],
+        [InlineKeyboardButton(text="✦ Предложения",    callback_data="adm_ideas")],
+        [InlineKeyboardButton(text="← В меню",         callback_data="back_menu")],
     ])
 
 
@@ -247,9 +250,9 @@ def kb_admin() -> InlineKeyboardMarkup:
 #  GROQ AI  (без лимитов — Groq бесплатный)
 # ══════════════════════════════════════════════════════
 SYSTEM_PROMPT = (
-    "Ты умный ассистент внутри Telegram-бота SavedMessages. "
+    "Ты сдержанный, элегантный ИИ-консьерж внутри Telegram-бота Quiet Mod. "
     "Отвечай чётко, без лишней воды. Язык — язык пользователя. "
-    "Будь дружелюбным и полезным."
+    "Будь дружелюбным и полезным, держи стиль лаконичного люкса."
 )
 
 
@@ -408,21 +411,22 @@ async def cmd_start(msg: Message, state: FSMContext):
             pass
 
     is_prem = await db.is_premium(uid)
-    badge   = "⭐" if is_prem else ""
-    status  = "Premium активен" if is_prem else "Бесплатный тариф"
+    badge   = "◈" if is_prem else ""
+    status  = "VIP-статус" if is_prem else "Базовый доступ"
     home_text = (
-        f"👁  <b>SavedMessages Bot</b>  {badge}\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
-        f"Привет, <b>{html_escape(name)}</b> 👋\n\n"
-        "Я перехватываю <b>удалённые и изменённые</b>\n"
-        "сообщения в твоих чатах — мгновенно.\n\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-        f"🔹 Статус:    <b>{status}</b>\n"
-        f"🔹 Перехват:  <b>∞ сообщений</b>\n"
-        f"🔹 Кэш:       <b>{'200' if is_prem else '20'} сообщений</b>\n"
-        f"🔹 ИИ:        <b>бесплатно, без лимитов</b>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
-        f"🔗 Твоя реф. ссылка:\n"
+        f"👁️ <b>QUIET MOD</b> {badge}\n"
+        f"<code>{LINE}</code>\n\n"
+        f"<b>{html_escape(name)}</b>, добро пожаловать в тишину.\n\n"
+        "Я слежу за тем, что исчезает —\n"
+        "<b>удалённые и изменённые</b> сообщения\n"
+        "появятся здесь раньше, чем их забудут.\n\n"
+        f"<code>{LINE}</code>\n"
+        f"◆ Статус:     <b>{status}</b>\n"
+        f"◆ Перехват:   <b>безлимит</b>\n"
+        f"◆ Архив:      <b>{'200' if is_prem else '20'} записей</b>\n"
+        f"◆ ИИ:         <b>без лимитов</b>\n"
+        f"<code>{LINE}</code>\n\n"
+        f"🔗 Пригласить:\n"
         f"<code>{ref_link(uid)}</code>"
     )
     await _show_home(uid, home_text, kb_main(uid, is_prem), msg)
@@ -436,7 +440,7 @@ async def cmd_admin(msg: Message):
     if msg.from_user.id != ADMIN_ID:
         return
     await msg.answer(
-        f"🛡 <b>Панель администратора</b>\n{LINE}",
+        f"🕶 <b>Admin Suite</b>\n{LINE}",
         reply_markup=kb_admin(),
     )
 
@@ -503,17 +507,17 @@ async def on_ai_inline(msg: Message):
     # Шаг 1: редактируем → "ожидание..." с мигающим эффектом (~7 сек)
     ok = await _business_edit_message(
         msg.business_connection_id, msg.chat.id, msg.message_id,
-        "⏳ Ожидание ответа..."
+        "◆ ·"
     )
     if not ok:
         return
 
     await asyncio.sleep(2)
-    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "⏳ Ожидание ответа..")
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "◆ · ·")
     await asyncio.sleep(2)
-    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "⏳ Ожидание ответа...")
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "◆ · · ·")
     await asyncio.sleep(2)
-    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "⏳ Ожидание ответа..")
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "◆ · ·")
     await asyncio.sleep(1)
 
     # Шаг 2: если есть фото — скачиваем
@@ -525,7 +529,7 @@ async def on_ai_inline(msg: Message):
     answer = await groq_chat(owner_id, question or "Опиши что на фото.", image_base64=image_b64)
 
     # Шаг 4: редактируем → ответ + подпись
-    result_text = f"{html_escape(answer)}\n\n— @{BOT_USERNAME}"
+    result_text = f"{html_escape(answer)}\n\n— 👁️ @{BOT_USERNAME}"
     await _business_edit_message(
         msg.business_connection_id, msg.chat.id, msg.message_id,
         result_text
@@ -555,7 +559,7 @@ async def on_ai_group(msg: Message):
     # Регистрируем пользователя если ещё нет
     await db.upsert_user(uid, msg.from_user.username or "", msg.from_user.full_name or "")
 
-    thinking = await msg.reply("⏳ Думаю...")
+    thinking = await msg.reply("◆ · · ·")
 
     image_b64 = None
     if msg.photo:
@@ -564,11 +568,11 @@ async def on_ai_group(msg: Message):
     answer = await groq_chat(uid, question, image_base64=image_b64)
 
     try:
-        await thinking.edit_text(f"🤖 {html_escape(answer)}")
+        await thinking.edit_text(f"👁️ {html_escape(answer)}")
     except Exception:
         try:
             await thinking.delete()
-            await msg.reply(f"🤖 {html_escape(answer)}")
+            await msg.reply(f"👁️ {html_escape(answer)}")
         except Exception as e:
             log.error(f"ai_group reply: {e}")
 
@@ -646,8 +650,8 @@ async def on_edited_business_msg(msg: Message):
 
     # Не уведомляем об изменениях сделанных самим ботом (.ai ответы)
     is_bot_edit = (
-        f"— @{BOT_USERNAME}" in new_text
-        or new_text.strip() == "⏳ ИИ думает..."
+        f"— 👁️ @{BOT_USERNAME}" in new_text
+        or new_text.strip().startswith("◆")
     )
 
     # Не уведомляем если владелец редактирует своё собственное сообщение
@@ -662,18 +666,18 @@ async def on_edited_business_msg(msg: Message):
             f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
         )
         notify = (
-            f"✏️ <b>Сообщение изменено</b>\n"
+            f"✦ <b>Сообщение отредактировано</b>\n"
             f"{LINE}\n"
             f"👤 <b>{html_escape(sender)}</b>\n"
-            f"💬 {html_escape(msg.chat.title or getattr(msg.chat, 'full_name', None) or 'Личные')}\n"
-            f"🕐 {msg.date.strftime('%d.%m.%Y · %H:%M')}\n"
+            f"◆ {html_escape(msg.chat.title or getattr(msg.chat, 'full_name', None) or 'Личные')}\n"
+            f"◷ {msg.date.strftime('%d.%m.%Y · %H:%M')}\n"
             f"{LINE}\n"
         )
         if old_text:
-            notify += f"📝 <b>Было:</b>\n{html_escape(old_text)}\n\n"
+            notify += f"◇ <b>Было:</b>\n{html_escape(old_text)}\n\n"
         else:
-            notify += "📝 <b>Было:</b> <i>не в кэше</i>\n\n"
-        notify += f"📝 <b>Стало:</b>\n{html_escape(new_text)}"
+            notify += "◇ <b>Было:</b> <i>нет в архиве</i>\n\n"
+        notify += f"◆ <b>Стало:</b>\n{html_escape(new_text)}"
         await _send_notify(owner_id, notify)
 
     # В любом случае обновляем кэш новым содержимым
@@ -767,10 +771,10 @@ async def on_deleted(event: BusinessMessagesDeleted):
             # Отправляем даже если не в кэше — хотя бы факт удаления
             await _send_notify(
                 owner_id,
-                f"🗑 <b>Сообщение удалено</b>\n"
+                f"✕ <b>Сообщение исчезло</b>\n"
                 f"{LINE}\n"
-                f"⚠️ Сообщение <b>#{msg_id}</b> было удалено,\n"
-                "но его не было в кэше — возможно, бот был только что подключён.",
+                f"◆ Сообщение <b>#{msg_id}</b> было удалено,\n"
+                "но не было в архиве — возможно, бот только подключился.",
             )
             continue
 
@@ -782,18 +786,18 @@ async def on_deleted(event: BusinessMessagesDeleted):
         sender = fmt_sender(cached["from_name"], cached["username"])
 
         text = (
-            f"🗑 <b>Удалённое сообщение</b>\n"
+            f"✕ <b>Удалённое сообщение</b>\n"
             f"{LINE}\n"
-            f"👤 Пользователь <b>{sender}</b>\n"
-            f"   удалил сообщение\n"
+            f"👤 <b>{sender}</b>\n"
+            f"   удалил(а) сообщение\n"
             f"{LINE}\n"
-            f"💬 Чат: {cached['chat']}\n"
-            f"🕐 Время: {cached['date']}\n"
-            f"📦 Тип: {cached['media_type']}"
+            f"◆ Чат: {cached['chat']}\n"
+            f"◷ Время: {cached['date']}\n"
+            f"◇ Тип: {cached['media_type']}"
         )
         if cached["text"]:
             # Красиво оборачиваем текст
-            text += f"\n{LINE}\n📝 <b>Содержимое:</b>\n{cached['text']}"
+            text += f"\n{LINE}\n◆ <b>Содержимое:</b>\n{cached['text']}"
 
         sent_id = await _send_notify(owner_id, text, reply_markup=kb_deleted(msg_id))
         if sent_id is None:
@@ -808,7 +812,7 @@ async def on_deleted(event: BusinessMessagesDeleted):
                     try:
                         await bot.send_message(
                             owner_id,
-                            f"🎙 <b>Расшифровка голосового:</b>\n{LINE}\n{html_escape(transcript)}"
+                            f"◆ <b>Расшифровка голосового:</b>\n{LINE}\n{html_escape(transcript)}"
                         )
                     except Exception:
                         pass
@@ -822,10 +826,10 @@ async def cb_ai_open(call: CallbackQuery, state: FSMContext):
     await state.set_state(S.ai_chat)
     await call.answer()
     await call.message.edit_text(
-        f"🤖 <b>ИИ-ассистент</b>\n{LINE}\n"
+        f"🖤 <b>ИИ-консьерж</b>\n{LINE}\n"
         f"Модель: <b>Llama 4 Scout · Vision</b>\n"
-        f"Лимит: <b>∞ (бесплатно)</b>\n\n"
-        "Пиши что угодно — отвечу быстро 🚀",
+        f"Лимит: <b>без ограничений</b>\n\n"
+        "Спрашивай что угодно — отвечу тихо и быстро ◆",
         reply_markup=kb_ai(),
     )
 
@@ -839,12 +843,12 @@ async def ai_msg(msg: Message, state: FSMContext):
     has_text  = bool(msg.text or msg.caption)
 
     if not has_text and not has_photo:
-        await msg.answer("⚠️ Отправь текст или фото (можно фото с подписью).")
+        await msg.answer("◇ Отправь текст или фото (можно с подписью).")
         return
 
     text_content = msg.text or msg.caption or ""
 
-    thinking = await msg.answer("⏳ Думаю...")
+    thinking = await msg.answer("◆ · · ·")
 
     image_b64 = None
     if has_photo:
@@ -852,18 +856,18 @@ async def ai_msg(msg: Message, state: FSMContext):
         file_id = msg.photo[-1].file_id
         image_b64 = await _get_image_base64(bot, file_id)
         if image_b64 is None:
-            await thinking.edit_text("⚠️ Не смог загрузить фото — попробуй ещё раз.")
+            await thinking.edit_text("◇ Не смог загрузить фото — попробуй ещё раз.")
             return
 
     reply = await groq_chat(uid, text_content, image_base64=image_b64)
     await thinking.delete()
-    await msg.answer(f"🤖 {html_escape(reply)}", reply_markup=kb_ai())
+    await msg.answer(f"👁️ {html_escape(reply)}", reply_markup=kb_ai())
 
 
 @dp.callback_query(F.data == "ai_clear")
 async def cb_ai_clear(call: CallbackQuery):
     ai_history.pop(call.from_user.id, None)
-    await call.answer("🗑 История очищена", show_alert=True)
+    await call.answer("✕ Диалог сброшен", show_alert=True)
 
 
 @dp.callback_query(F.data == "ai_exit")
@@ -873,7 +877,7 @@ async def cb_ai_exit(call: CallbackQuery, state: FSMContext):
     is_prem = await db.is_premium(uid)
     await call.answer()
     await call.message.edit_text(
-        f"👁 <b>SavedMessages Bot</b>\n{LINE}\nГлавное меню",
+        f"👁️ <b>QUIET MOD</b>\n{LINE}\nГлавное меню",
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -884,12 +888,12 @@ async def cb_ai_exit(call: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "search")
 async def cb_search(call: CallbackQuery, state: FSMContext):
     if not await db.is_premium(call.from_user.id):
-        await call.answer("⭐ Поиск — только для Premium", show_alert=True)
+        await call.answer("◈ Поиск — только для VIP", show_alert=True)
         return
     await state.set_state(S.ai_search)
     await call.answer()
     await call.message.edit_text(
-        f"🔍 <b>Поиск по кэшу</b>\n{LINE}\n"
+        f"🔎 <b>Поиск по архиву</b>\n{LINE}\n"
         "Введи имя, @username или ключевое слово:",
         reply_markup=kb_back("menu"),
     )
@@ -904,17 +908,17 @@ async def search_msg(msg: Message, state: FSMContext):
     results = await db.search_messages(uid, msg.text.strip())
     if not results:
         await msg.answer(
-            f"🔍 <b>Ничего не найдено</b> по «{msg.text}»",
+            f"🔎 <b>Ничего не найдено</b> по «{msg.text}»",
             reply_markup=kb_back("menu"),
         )
         return
     lines = []
     for m in results[:15]:
         preview = (m["text"][:40] + "…") if len(m["text"] or "") > 40 else (m["text"] or m["media_type"])
-        lines.append(f"▪ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
+        lines.append(f"◆ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
     is_prem = await db.is_premium(uid)
     await msg.answer(
-        f"🔍 <b>Найдено: {len(results)}</b>\n{LINE}\n" + "\n\n".join(lines),
+        f"🔎 <b>Найдено: {len(results)}</b>\n{LINE}\n" + "\n\n".join(lines),
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -934,35 +938,35 @@ async def cb_save_forever(call: CallbackQuery):
 
     sender = fmt_sender(cached["from_name"], cached["username"])
     save_text = (
-        f"💾 <b>Сохранено из перехвата</b>\n"
+        f"◆ <b>Сохранено из перехвата</b>\n"
         f"{LINE}\n"
         f"👤 От: <b>{sender}</b>\n"
-        f"💬 Чат: {cached['chat']}\n"
-        f"🕐 Время: {cached['date']}\n"
-        f"📦 Тип: {cached['media_type']}"
+        f"◆ Чат: {cached['chat']}\n"
+        f"◷ Время: {cached['date']}\n"
+        f"◇ Тип: {cached['media_type']}"
     )
     if cached["text"]:
-        save_text += f"\n{LINE}\n📝 {html_escape(cached['text'])}"
+        save_text += f"\n{LINE}\n◆ {html_escape(cached['text'])}"
 
     try:
         # Отправляем в личный чат пользователя (Saved Messages = сообщение самому себе)
         await bot.send_message(uid, save_text)
         if cached["file_id"]:
             await _send_media(uid, cached["file_id"], cached["media_type"])
-        await call.answer("💾 Сохранено в чате с ботом!", show_alert=False)
+        await call.answer("◆ Сохранено в архиве!", show_alert=False)
         # Убираем кнопку сохранения из клавиатуры
         new_kb = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Понял",          callback_data=f"ack_{msg_id}"),
-                InlineKeyboardButton(text="🗑 Из кэша",        callback_data=f"del_{msg_id}"),
+                InlineKeyboardButton(text="✔ Принято",      callback_data=f"ack_{msg_id}"),
+                InlineKeyboardButton(text="✕ Стереть",      callback_data=f"del_{msg_id}"),
             ],
-            [InlineKeyboardButton(text="✅ Сохранено",         callback_data="noop")],
-            [InlineKeyboardButton(text="📋 Все сохранённые",   callback_data="show_all")],
+            [InlineKeyboardButton(text="◆ Сохранено",        callback_data="noop")],
+            [InlineKeyboardButton(text="🗃 Весь архив",       callback_data="show_all")],
         ])
         await call.message.edit_reply_markup(reply_markup=new_kb)
     except Exception as e:
         log.error(f"save_forever: {e}")
-        await call.answer("❌ Не удалось сохранить", show_alert=True)
+        await call.answer("✕ Не удалось сохранить", show_alert=True)
 
 
 # ══════════════════════════════════════════════════════
@@ -973,16 +977,16 @@ async def cb_back(call: CallbackQuery, state: FSMContext):
     await state.clear()
     uid     = call.from_user.id
     is_prem = await db.is_premium(uid)
-    status  = "Premium активен" if is_prem else "Бесплатный тариф"
+    status  = "VIP-статус" if is_prem else "Базовый доступ"
     await call.answer()
     await call.message.edit_text(
-        f"👁  <b>SavedMessages Bot</b>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
-        f"🔹 Статус:    <b>{status}</b>\n"
-        f"🔹 Перехват:  <b>∞ сообщений</b>\n"
-        f"🔹 Кэш:       <b>{'200' if is_prem else '20'} сообщений</b>\n"
-        f"🔹 ИИ:        <b>бесплатно, без лимитов</b>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"👁️ <b>QUIET MOD</b>\n"
+        f"<code>{LINE}</code>\n\n"
+        f"◆ Статус:    <b>{status}</b>\n"
+        f"◆ Перехват:  <b>безлимит</b>\n"
+        f"◆ Архив:     <b>{'200' if is_prem else '20'} записей</b>\n"
+        f"◆ ИИ:        <b>без лимитов</b>\n"
+        f"<code>{LINE}</code>",
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -996,12 +1000,12 @@ async def cb_noop(call: CallbackQuery):
 async def cb_howto(call: CallbackQuery):
     await call.answer()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Профиль (Business)", callback_data="howto_profile")],
-        [InlineKeyboardButton(text="📢 Группа / Канал",     callback_data="howto_group")],
-        [InlineKeyboardButton(text="◀ Назад",               callback_data="back_menu")],
+        [InlineKeyboardButton(text="👤 Личный профиль (Business)", callback_data="howto_profile")],
+        [InlineKeyboardButton(text="📡 Группа / Канал",            callback_data="howto_group")],
+        [InlineKeyboardButton(text="← В меню",                     callback_data="back_menu")],
     ])
     await call.message.edit_text(
-        f"❓ <b>Как подключить бота?</b>\n{LINE}\n"
+        f"⚙ <b>Подключение</b>\n{LINE}\n"
         "Выбери тип подключения:",
         reply_markup=kb,
     )
@@ -1019,12 +1023,12 @@ async def cb_howto_profile(call: CallbackQuery):
         f"4️⃣ Выбери <code>@{BOT_USERNAME}</code>\n"
         "5️⃣ Включи <b>Доступ к сообщениям</b>\n"
         f"{LINE}\n"
-        "✅ Бот перехватывает <b>все</b> удалённые\n"
+        "✔ Бот будет тихо перехватывать <b>все</b> удалённые\n"
         "и изменённые сообщения в твоих личных чатах.\n\n"
-        "💡 <i>Твои собственные удалённые сообщения\n"
+        "◇ <i>Твои собственные удалённые сообщения\n"
         "бот не присылает — только чужие.</i>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀ Назад", callback_data="howto")],
+            [InlineKeyboardButton(text="← Назад", callback_data="howto")],
         ]),
     )
 
@@ -1033,19 +1037,19 @@ async def cb_howto_profile(call: CallbackQuery):
 async def cb_howto_group(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text(
-        f"📢 <b>Подключение к группе / каналу</b>\n{LINE}\n"
+        f"📡 <b>Подключение к группе / каналу</b>\n{LINE}\n"
         "Бот работает бесплатно — Telegram Business не нужен!\n\n"
-        "1️⃣ Добавь <code>@{BOT_USERNAME}</code> в группу или канал\n"
+        f"1️⃣ Добавь <code>@{BOT_USERNAME}</code> в группу или канал\n"
         "2️⃣ Дай боту права <b>Администратора</b>\n"
         "   (нужно: читать сообщения)\n"
         "3️⃣ Для групп: отключи Privacy Mode через\n"
         "   @BotFather → /setprivacy → Disabled\n"
         f"{LINE}\n"
-        "✅ Готово! Теперь в группе/канале можно\n"
+        "✔ Готово! Теперь в группе/канале можно\n"
         "писать <code>.ai вопрос</code> — бот ответит прямо там.\n\n"
-        "💡 <i>Пример: </i><code>.ai объясни квантовую физику</code>",
+        "◇ <i>Пример: </i><code>.ai объясни квантовую физику</code>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀ Назад", callback_data="howto")],
+            [InlineKeyboardButton(text="← Назад", callback_data="howto")],
         ]),
     )
 
@@ -1056,12 +1060,12 @@ async def cb_referrals(call: CallbackQuery):
     refs = await db.count_referrals(uid)
     await call.answer()
     await call.message.edit_text(
-        f"👥 <b>Реферальная программа</b>\n{LINE}\n"
-        f"Пригласи друга — помоги проекту расти!\n\n"
+        f"🤝 <b>Приглашения</b>\n{LINE}\n"
+        f"Пригласи близких — помоги проекту расти.\n\n"
         f"🔗 Твоя ссылка:\n<code>{ref_link(uid)}</code>\n\n"
-        f"🤝 Приглашено: <b>{refs}</b>\n\n"
-        "Бот бесплатен для всех — рефералы помогают\n"
-        "развивать проект и снижать серверные расходы.",
+        f"◆ Приглашено: <b>{refs}</b>\n\n"
+        "Доступ остаётся бесплатным для всех —\n"
+        "приглашения помогают развивать проект.",
         reply_markup=kb_back("menu"),
     )
 
@@ -1078,13 +1082,13 @@ async def cb_stats(call: CallbackQuery):
 
     await call.answer()
     await call.message.edit_text(
-        f"📊 <b>Твоя статистика</b> {badge}\n{LINE}\n"
-        f"💾 В кэше:       <b>{cached}</b>\n"
-        f"👥 Рефералов:    <b>{refs}</b>\n"
-        f"🤖 ИИ:           <b>∞ (бесплатно)</b>\n"
-        f"⭐ Premium до:   <b>{prem_txt}</b>\n"
+        f"◆ <b>Твой профиль</b> {badge}\n{LINE}\n"
+        f"🗃 В архиве:     <b>{cached}</b>\n"
+        f"🤝 Приглашено:   <b>{refs}</b>\n"
+        f"🖤 ИИ:           <b>безлимит</b>\n"
+        f"◈ VIP до:        <b>{prem_txt}</b>\n"
         f"{LINE}\n"
-        f"Лимит кэша: {'200 (premium)' if is_prem else '20 (free)'}",
+        f"Лимит архива: {'200 (VIP)' if is_prem else '20 (базовый)'}",
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1092,7 +1096,7 @@ async def cb_stats(call: CallbackQuery):
 @dp.callback_query(F.data == "clear_cache")
 async def cb_clear(call: CallbackQuery):
     count = await db.clear_messages(call.from_user.id)
-    await call.answer(f"🗑 Удалено {count} записей", show_alert=True)
+    await call.answer(f"✕ Удалено {count} записей", show_alert=True)
 
 
 @dp.callback_query(F.data == "show_all")
@@ -1100,23 +1104,23 @@ async def cb_show_all(call: CallbackQuery):
     uid      = call.from_user.id
     messages = await db.get_recent_messages(uid, 20)
     if not messages:
-        await call.answer("📋 Кэш пуст", show_alert=True)
+        await call.answer("🗃 Архив пуст", show_alert=True)
         return
     is_prem = await db.is_premium(uid)
     lines = []
     for m in messages:
         preview = (m["text"][:40] + "…") if len(m["text"] or "") > 40 else (m["text"] or m["media_type"])
-        lines.append(f"▪ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
+        lines.append(f"◆ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
     await call.answer()
     await call.message.edit_text(
-        f"📋 <b>Последние {len(messages)} сообщений</b>\n{LINE}\n" + "\n\n".join(lines),
+        f"🗃 <b>Последние {len(messages)} записей</b>\n{LINE}\n" + "\n\n".join(lines),
         reply_markup=kb_main(uid, is_prem),
     )
 
 
 @dp.callback_query(F.data.startswith("ack_"))
 async def cb_ack(call: CallbackQuery):
-    await call.answer("✅ Принято")
+    await call.answer("✔ Принято")
     await call.message.edit_reply_markup(reply_markup=None)
 
 
@@ -1124,7 +1128,7 @@ async def cb_ack(call: CallbackQuery):
 async def cb_del(call: CallbackQuery):
     msg_id = int(call.data.split("_")[1])
     await db.delete_message(call.from_user.id, msg_id)
-    await call.answer("🗑 Удалено из кэша")
+    await call.answer("✕ Удалено из архива")
     await call.message.edit_reply_markup(reply_markup=None)
 
 
@@ -1135,18 +1139,18 @@ async def cb_del(call: CallbackQuery):
 async def cb_premium_info(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text(
-        f"⭐ <b>Premium — что даёт?</b>\n{LINE}\n"
-        "🆓 <b>Бесплатно навсегда:</b>\n"
-        "  • Перехват удалённых и изменённых — ∞\n"
-        "  • Кэш: 20 сообщений\n"
+        f"◈ <b>VIP — что даёт?</b>\n{LINE}\n"
+        "◇ <b>Бесплатно навсегда:</b>\n"
+        "  • Перехват удалённых и изменённых — безлимит\n"
+        "  • Архив: 20 записей\n"
         "  • ИИ: безлимитно\n\n"
-        "⭐ <b>Premium · 50 звёзд/месяц:</b>\n"
-        "  • Кэш: 200 сообщений\n"
-        "  • Поиск по всему кэшу\n\n"
-        "💎 <b>Донат 100⭐+ (единоразово):</b>\n"
-        "  • Значок 💎 в статистике\n"
-        "  • +30 дней Premium в подарок\n"
-        "  • Моя искренняя благодарность 🙏",
+        "◈ <b>VIP · 50⭐/месяц:</b>\n"
+        "  • Архив: 200 записей\n"
+        "  • Поиск по всему архиву\n\n"
+        "◇ <b>Вклад 100⭐+ (единоразово):</b>\n"
+        "  • Метка в профиле\n"
+        "  • +30 дней VIP в подарок\n"
+        "  • Моя искренняя благодарность 🖤",
         reply_markup=kb_premium(),
     )
 
@@ -1158,11 +1162,11 @@ async def cb_pay(call: CallbackQuery):
     stars = int(parts[2])
 
     if kind == "premium":
-        title       = "⭐ Premium · 1 месяц"
-        description = "Premium доступ к SavedMessages Bot на 30 дней"
+        title       = "◈ VIP · 1 месяц"
+        description = "VIP-доступ к Quiet Mod на 30 дней"
     else:
-        title       = f"💎 Донат {stars}⭐"
-        description = f"Поддержка проекта SavedMessages Bot — {stars} звёзд"
+        title       = f"◇ Вклад {stars}⭐"
+        description = f"Поддержка проекта Quiet Mod — {stars} звёзд"
 
     await call.answer()
     await bot.send_invoice(
@@ -1198,9 +1202,9 @@ async def on_payment(msg: Message):
             new_date = date.today() + timedelta(days=30)
         await db.set_premium(uid, new_date)
         text = (
-            f"⭐ <b>Premium активирован!</b>\n{LINE}\n"
+            f"◈ <b>VIP активирован!</b>\n{LINE}\n"
             f"Действует до: <b>{new_date.strftime('%d.%m.%Y')}</b>\n"
-            "Кэш расширен до 200 · Поиск включён."
+            "Архив расширен до 200 · Поиск включён."
         )
     else:
         if stars >= DONOR_BADGE_MIN:
@@ -1208,16 +1212,16 @@ async def on_payment(msg: Message):
             bonus_date = date.today() + timedelta(days=30)
             await db.set_premium(uid, bonus_date)
             text = (
-                f"💎 <b>Спасибо за поддержку!</b>\n{LINE}\n"
+                f"◇ <b>Спасибо за поддержку!</b>\n{LINE}\n"
                 f"Ты отправил <b>{stars}⭐</b>\n"
-                f"Значок донатера: 💎\n"
-                f"Premium в подарок до: <b>{bonus_date.strftime('%d.%m.%Y')}</b>"
+                f"Метка в профиле: ◇\n"
+                f"VIP в подарок до: <b>{bonus_date.strftime('%d.%m.%Y')}</b>"
             )
         else:
             text = (
-                f"💝 <b>Огромное спасибо!</b>\n{LINE}\n"
+                f"🖤 <b>Огромное спасибо!</b>\n{LINE}\n"
                 f"Ты поддержал проект на <b>{stars}⭐</b>\n"
-                "Эти средства идут на серверы и развитие 🚀"
+                "Эти средства идут на серверы и развитие."
             )
 
     is_prem = await db.is_premium(uid)
@@ -1249,7 +1253,7 @@ async def cb_adm(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.answer()
     await call.message.edit_text(
-        f"🛡 <b>Панель администратора</b>\n{LINE}",
+        f"🕶 <b>Admin Suite</b>\n{LINE}",
         reply_markup=kb_admin(),
     )
 
@@ -1260,7 +1264,7 @@ async def cb_adm_users(call: CallbackQuery):
     ids   = await db.all_user_ids()
     await call.answer()
     await call.message.edit_text(
-        f"👥 <b>Пользователи</b>\n{LINE}\n"
+        f"◆ <b>Пользователи</b>\n{LINE}\n"
         f"Всего: <b>{len(ids)}</b>",
         reply_markup=kb_admin(),
     )
@@ -1275,11 +1279,11 @@ async def cb_adm_stats(call: CallbackQuery):
     ideas   = await db.count_ideas()
     await call.answer()
     await call.message.edit_text(
-        f"📊 <b>Общая статистика</b>\n{LINE}\n"
+        f"◆ <b>Общая статистика</b>\n{LINE}\n"
         f"👥 Пользователей:  <b>{users}</b>\n"
-        f"💾 Сообщений в БД: <b>{msgs}</b>\n"
+        f"🗃 Записей в БД:   <b>{msgs}</b>\n"
         f"⭐ Всего звёзд:    <b>{stars}</b>\n"
-        f"💡 Идей:           <b>{ideas}</b>",
+        f"✦ Предложений:    <b>{ideas}</b>",
         reply_markup=kb_admin(),
     )
 
@@ -1294,8 +1298,8 @@ async def cb_adm_ideas(call: CallbackQuery):
     ideas = await db.get_ideas(30)
     if not ideas:
         await call.message.edit_text(
-            f"💡 <b>Идеи от пользователей</b>\n{LINE}\n"
-            "Пока идей нет — расскажи людям о кнопке 😊",
+            f"✦ <b>Предложения от пользователей</b>\n{LINE}\n"
+            "Пока пусто — расскажи людям о кнопке 🖤",
             reply_markup=kb_admin(),
         )
         return
@@ -1312,14 +1316,14 @@ async def cb_adm_ideas(call: CallbackQuery):
     kb_rows = []
     for idea in ideas[:10]:
         kb_rows.append([InlineKeyboardButton(
-            text=f"🗑 Удалить #{idea['id']}",
+            text=f"✕ Удалить #{idea['id']}",
             callback_data=f"adm_del_idea_{idea['id']}"
         )])
-    kb_rows.append([InlineKeyboardButton(text="🧹  Очистить все идеи", callback_data="adm_clear_ideas")])
+    kb_rows.append([InlineKeyboardButton(text="🧹 Очистить все", callback_data="adm_clear_ideas")])
     kb_rows.append([InlineKeyboardButton(text="← Назад", callback_data="adm")])
 
     await call.message.edit_text(
-        f"💡 <b>Идеи от пользователей</b>  ({len(ideas)} шт.)\n{LINE}\n\n"
+        f"✦ <b>Предложения от пользователей</b>  ({len(ideas)} шт.)\n{LINE}\n\n"
         + "\n\n".join(lines),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
     )
@@ -1330,7 +1334,7 @@ async def cb_adm_del_idea(call: CallbackQuery):
     if not _is_admin(call): return
     idea_id = int(call.data.split("_")[-1])
     await db.delete_idea(idea_id)
-    await call.answer(f"🗑 Идея #{idea_id} удалена")
+    await call.answer(f"✕ Предложение #{idea_id} удалено")
     # обновляем список
     await cb_adm_ideas(call)
 
@@ -1339,9 +1343,9 @@ async def cb_adm_del_idea(call: CallbackQuery):
 async def cb_adm_clear_ideas(call: CallbackQuery):
     if not _is_admin(call): return
     await db.clear_ideas()
-    await call.answer("🧹 Все идеи очищены", show_alert=True)
+    await call.answer("🧹 Все предложения очищены", show_alert=True)
     await call.message.edit_text(
-        f"💡 <b>Идеи от пользователей</b>\n{LINE}\n"
+        f"✦ <b>Предложения от пользователей</b>\n{LINE}\n"
         "Список очищен.",
         reply_markup=kb_admin(),
     )
@@ -1355,13 +1359,13 @@ async def cb_suggest_idea(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.set_state(S.suggest_idea)
     await call.message.edit_text(
-        f"💡 <b>Предложи идею</b>\n{LINE}\n\n"
-        "Расскажи что бы ты хотел видеть в боте.\n"
+        f"✦ <b>Предложить идею</b>\n{LINE}\n\n"
+        "Расскажи, что бы ты хотел видеть в боте.\n"
         "Любая идея — полезная функция, улучшение\n"
-        "интерфейса, новая команда — всё приветствуется!\n\n"
+        "интерфейса, новая команда — всё приветствуется.\n\n"
         "✍️ Напиши своё предложение:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✖  Отмена", callback_data="back_menu")]
+            [InlineKeyboardButton(text="✕ Отмена", callback_data="back_menu")]
         ]),
     )
 
@@ -1371,7 +1375,7 @@ async def on_idea_input(msg: Message, state: FSMContext):
     uid   = msg.from_user.id
     text  = msg.text or msg.caption or ""
     if not text.strip():
-        await msg.answer("⚠️ Напиши текст идеи — пустое сообщение не принято.")
+        await msg.answer("◇ Напиши текст идеи — пустое сообщение не принято.")
         return
 
     await state.clear()
@@ -1384,10 +1388,10 @@ async def on_idea_input(msg: Message, state: FSMContext):
 
     is_prem = await db.is_premium(uid)
     await msg.answer(
-        f"💡 <b>Спасибо за идею!</b>\n{LINE}\n\n"
+        f"✦ <b>Спасибо за идею!</b>\n{LINE}\n\n"
         "Твоё предложение отправлено разработчику.\n"
-        "Лучшие идеи попадают в следующие обновления 🚀\n\n"
-        "Ты помогаешь сделать бот лучше 🖤",
+        "Лучшие идеи попадают в следующие обновления.\n\n"
+        "Ты помогаешь сделать Quiet Mod лучше 🖤",
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1396,7 +1400,7 @@ async def on_idea_input(msg: Message, state: FSMContext):
     try:
         await bot.send_message(
             ADMIN_ID,
-            f"💡 <b>Новая идея!</b>\n{LINE}\n"
+            f"✦ <b>Новая идея!</b>\n{LINE}\n"
             f"👤 {uname} (ID: {uid})\n\n"
             f"💬 {html_escape(text[:500])}",
         )
@@ -1408,31 +1412,31 @@ async def on_idea_input(msg: Message, state: FSMContext):
 #  ЗАПУСК
 # ══════════════════════════════════════════════════════
 DEVLOG = (
-    "👁 <b>SavedMessages Bot</b>  <code>v3.0</code>\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "Привет! Это полный обзор того, что умеет бот.\n"
-    "Если ты здесь впервые — добро пожаловать 🖤\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "🛡 <b>ПЕРЕХВАТ СООБЩЕНИЙ</b>\n\n"
-    "🗑 <b>Удалённые сообщения</b>\n"
+    "👁️ <b>QUIET MOD</b>  <code>Black Edition</code>\n"
+    f"{LINE}\n\n"
+    "Привет! Это краткий обзор того, что умеет бот.\n"
+    "Если ты здесь впервые — добро пожаловать в тишину 🖤\n\n"
+    f"{LINE}\n"
+    "🕶 <b>ПЕРЕХВАТ СООБЩЕНИЙ</b>\n\n"
+    "✕ <b>Удалённые сообщения</b>\n"
     "   Кто-то удалил сообщение в переписке?\n"
     "   Бот мгновенно пришлёт тебе его содержимое:\n"
     "   текст, фото, видео, голосовое, стикер, GIF.\n\n"
-    "✏️ <b>Изменённые сообщения</b>\n"
+    "✦ <b>Изменённые сообщения</b>\n"
     "   Отредактировали сообщение после отправки?\n"
     "   Увидишь сразу — что <i>было</i> и что <i>стало</i>.\n\n"
-    "🔕 <b>Умный фильтр</b>\n"
+    "◇ <b>Умный фильтр</b>\n"
     "   Свои удалённые и изменённые — тишина.\n"
-    "   Только чужие. Никакого спама от самого себя.\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "🤖 <b>ИИ АССИСТЕНТ</b>  <i>(бесплатно, без лимитов)</i>\n\n"
+    "   Только чужие. Никакого лишнего шума.\n\n"
+    f"{LINE}\n"
+    "🖤 <b>ИИ-КОНСЬЕРЖ</b>  <i>(без лимитов)</i>\n\n"
     "💬 <b>Чат с ИИ прямо в боте</b>\n"
     "   Задай любой вопрос — ИИ ответит чётко и быстро.\n"
     "   История диалога сохраняется до сброса.\n\n"
     "🖼 <b>Анализ изображений</b>\n"
     "   Прикрепи фото — ИИ разберёт, прочитает текст,\n"
     "   решит задачу или объяснит что на картинке.\n\n"
-    "📢 <b>ИИ в группах и каналах</b>\n"
+    "📡 <b>ИИ в группах и каналах</b>\n"
     "   Добавь бота в любой чат, напиши:\n"
     "   <code>.ai вопрос</code> — бот ответит прямо в беседе.\n\n"
     "⚡ <b>ИИ в бизнес-переписке</b>\n"
@@ -1441,44 +1445,44 @@ DEVLOG = (
     "🎙 <b>Расшифровка голосовых</b>\n"
     "   Удалённое голосовое автоматически расшифруется\n"
     "   в текст. Whisper AI — точность 95%+.\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "💾 <b>КЭШ СООБЩЕНИЙ</b>\n\n"
+    f"{LINE}\n"
+    "🗃 <b>АРХИВ СООБЩЕНИЙ</b>\n\n"
     "📋 <b>Хранилище перехватов</b>\n"
-    "   Все перехваченные сообщения хранятся в кэше.\n"
-    "   Бесплатно: 20 штук · Premium: 200 штук.\n\n"
-    "🔍 <b>Поиск по кэшу</b>  <i>(Premium)</i>\n"
+    "   Все перехваченные сообщения хранятся в архиве.\n"
+    "   Базовый: 20 записей · VIP: 200 записей.\n\n"
+    "🔎 <b>Поиск по архиву</b>  <i>(VIP)</i>\n"
     "   Найди любое сообщение по тексту, имени\n"
     "   отправителя или юзернейму за секунды.\n\n"
-    "💾 <b>Сохранить навсегда</b>\n"
+    "◆ <b>Сохранить навсегда</b>\n"
     "   Одна кнопка под уведомлением — и сообщение\n"
-    "   останется у тебя навсегда вне зависимости от кэша.\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "⭐ <b>PREMIUM</b>  <code>50 звёзд / месяц</code>\n\n"
-    "   • Кэш расширяется с 20 до <b>200</b> сообщений\n"
-    "   • Поиск по всему кэшу\n"
-    "   • Значок ⭐ в статистике\n\n"
-    "💎 <b>ДОНАТ</b>  <code>100+ звёзд</code>\n\n"
-    "   • Значок 💎 навсегда\n"
-    "   • +30 дней Premium в подарок\n"
-    "   • Поддержка независимого проекта 🙏\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "💡 <b>КАК ПОДКЛЮЧИТЬ?</b>\n\n"
+    "   останется у тебя навсегда вне зависимости от архива.\n\n"
+    f"{LINE}\n"
+    "◈ <b>VIP</b>  <code>50 звёзд / месяц</code>\n\n"
+    "   • Архив расширяется с 20 до <b>200</b> записей\n"
+    "   • Поиск по всему архиву\n"
+    "   • Метка ◈ в профиле\n\n"
+    "◇ <b>ВКЛАД</b>  <code>100+ звёзд</code>\n\n"
+    "   • Метка ◇ навсегда\n"
+    "   • +30 дней VIP в подарок\n"
+    "   • Поддержка независимого проекта 🖤\n\n"
+    f"{LINE}\n"
+    "⚙ <b>КАК ПОДКЛЮЧИТЬ?</b>\n\n"
     "   Нужен <b>Telegram Business</b> (или просто добавить\n"
     "   бота в группу для ИИ-функций).\n"
-    "   В боте есть кнопка <b>«Как подключить»</b> — там\n"
+    "   В боте есть кнопка <b>«Подключение»</b> — там\n"
     "   пошаговая инструкция с картинками.\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    f"{LINE}\n"
     "🚀 <b>ВПЕРЕДИ — ЕЩЁ БОЛЬШЕ</b>\n\n"
     "   Бот активно развивается. В планах:\n"
     "   — Уведомления о скриншотах\n"
     "   — Статистика активности чатов\n"
-    "   — Экспорт кэша в файл\n"
+    "   — Экспорт архива в файл\n"
     "   — Ещё больше ИИ-возможностей\n\n"
-    "💬 Есть идея? Нажми кнопку <b>«💡 Идеи»</b> в боте.\n"
+    "💬 Есть идея? Нажми кнопку <b>«✦ Предложить»</b> в боте.\n"
     "   Лучшие идеи от вас — уже в следующем обновлении.\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    f"{LINE}\n"
     "Спасибо что ты здесь. Это только начало 🖤\n"
-    "— Команда <b>SavedMessages Bot</b>"
+    "— Команда <b>Quiet Mod 👁️</b>"
 )
 
 
@@ -1503,11 +1507,11 @@ async def _broadcast_devlog():
 
 async def main():
     await db.init_db()
-    log.info("🚀 SavedMessages Bot v3.0 запускается...")
+    log.info("🚀 Quiet Mod 👁️ запускается...")
     try:
         await bot.send_message(
             ADMIN_ID,
-            f"✅ <b>Бот запущен</b> · v3.0 · SQLite · Railway\n"
+            f"✔ <b>Бот запущен</b> · Quiet Mod 👁️ · SQLite · Railway\n"
             f"🤖 Модель: Llama 4 Scout (Vision)"
         )
     except Exception:
