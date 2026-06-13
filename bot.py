@@ -201,6 +201,7 @@ def kb_deleted(msg_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✅ Понял",           callback_data=f"ack_{msg_id}"),
             InlineKeyboardButton(text="🗑 Из кэша",         callback_data=f"del_{msg_id}"),
         ],
+        [InlineKeyboardButton(text="💾 Сохранить навсегда", callback_data=f"save_{msg_id}")],
         [InlineKeyboardButton(text="📋 Все сохранённые",   callback_data="show_all")],
     ])
 
@@ -682,6 +683,40 @@ async def on_edited_business_msg(msg: Message):
 
 
 # ══════════════════════════════════════════════════════
+#  ГОЛОС → ТЕКСТ  (Groq Whisper)
+# ══════════════════════════════════════════════════════
+async def _transcribe_voice(file_id: str) -> Optional[str]:
+    """Скачивает голосовое сообщение и транскрибирует через Groq Whisper."""
+    try:
+        file = await bot.get_file(file_id)
+        url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    return None
+                audio_bytes = await resp.read()
+
+        import io
+        form = aiohttp.FormData()
+        form.add_field("file", io.BytesIO(audio_bytes), filename="voice.ogg", content_type="audio/ogg")
+        form.add_field("model", "whisper-large-v3")
+        form.add_field("response_format", "text")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status == 200:
+                    return (await resp.text()).strip()
+    except Exception as e:
+        log.warning(f"Whisper transcribe: {e}")
+    return None
+
+
+# ══════════════════════════════════════════════════════
 #  УДАЛЁННЫЕ БИЗНЕС-СООБЩЕНИЯ
 # ══════════════════════════════════════════════════════
 async def _send_media(owner_id: int, file_id: str, mt: str):
@@ -748,6 +783,17 @@ async def on_deleted(event: BusinessMessagesDeleted):
 
         if cached["file_id"]:
             await _send_media(owner_id, cached["file_id"], cached["media_type"])
+            # Голос → текст
+            if "Голос" in cached["media_type"] and cached["file_id"]:
+                transcript = await _transcribe_voice(cached["file_id"])
+                if transcript:
+                    try:
+                        await bot.send_message(
+                            owner_id,
+                            f"🎙 <b>Расшифровка голосового:</b>\n{LINE}\n{html_escape(transcript)}"
+                        )
+                    except Exception:
+                        pass
 
 
 # ══════════════════════════════════════════════════════
@@ -853,6 +899,52 @@ async def search_msg(msg: Message, state: FSMContext):
         f"🔍 <b>Найдено: {len(results)}</b>\n{LINE}\n" + "\n\n".join(lines),
         reply_markup=kb_main(uid, is_prem),
     )
+
+
+# ══════════════════════════════════════════════════════
+#  СОХРАНИТЬ НАВСЕГДА (в Saved Messages Telegram)
+# ══════════════════════════════════════════════════════
+@dp.callback_query(F.data.startswith("save_"))
+async def cb_save_forever(call: CallbackQuery):
+    """Пересылает перехваченное сообщение в Saved Messages пользователя (навсегда)."""
+    msg_id = int(call.data.split("_")[1])
+    uid = call.from_user.id
+    cached = await db.get_message(uid, msg_id)
+    if not cached:
+        await call.answer("❌ Сообщение не найдено в кэше", show_alert=True)
+        return
+
+    sender = fmt_sender(cached["from_name"], cached["username"])
+    save_text = (
+        f"💾 <b>Сохранено из перехвата</b>\n"
+        f"{LINE}\n"
+        f"👤 От: <b>{sender}</b>\n"
+        f"💬 Чат: {cached['chat']}\n"
+        f"🕐 Время: {cached['date']}\n"
+        f"📦 Тип: {cached['media_type']}"
+    )
+    if cached["text"]:
+        save_text += f"\n{LINE}\n📝 {html_escape(cached['text'])}"
+
+    try:
+        # Отправляем в личный чат пользователя (Saved Messages = сообщение самому себе)
+        await bot.send_message(uid, save_text)
+        if cached["file_id"]:
+            await _send_media(uid, cached["file_id"], cached["media_type"])
+        await call.answer("💾 Сохранено в чате с ботом!", show_alert=False)
+        # Убираем кнопку сохранения из клавиатуры
+        new_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Понял",          callback_data=f"ack_{msg_id}"),
+                InlineKeyboardButton(text="🗑 Из кэша",        callback_data=f"del_{msg_id}"),
+            ],
+            [InlineKeyboardButton(text="✅ Сохранено",         callback_data="noop")],
+            [InlineKeyboardButton(text="📋 Все сохранённые",   callback_data="show_all")],
+        ])
+        await call.message.edit_reply_markup(reply_markup=new_kb)
+    except Exception as e:
+        log.error(f"save_forever: {e}")
+        await call.answer("❌ Не удалось сохранить", show_alert=True)
 
 
 # ══════════════════════════════════════════════════════
@@ -1168,6 +1260,56 @@ async def cb_adm_stats(call: CallbackQuery):
 # ══════════════════════════════════════════════════════
 #  ЗАПУСК
 # ══════════════════════════════════════════════════════
+DEVLOG = (
+    "🚀 <b>DevLog · Version 1.01</b>\n"
+    "🤖 Best TG Bots · @SaveDeleteMessageTelegrambot\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "✨ <b>Что нового в этом обновлении:</b>\n\n"
+    "🎙 <b>Голос → Текст</b>\n"
+    "   Удалили голосовое? Бот расшифрует его через ИИ\n"
+    "   и покажет текст. Ничего не потеряешь.\n\n"
+    "💾 <b>Кнопка «Сохранить навсегда»</b>\n"
+    "   Под каждым перехваченным сообщением появилась\n"
+    "   кнопка сохранения. Одним тапом — и оно у тебя\n"
+    "   в чате с ботом навсегда.\n\n"
+    "🖼 <b>Распознавание картинок</b>\n"
+    "   Отправь в чат с ИИ любую картинку — задачу,\n"
+    "   скриншот, фото текста. ИИ разберёт и решит.\n"
+    "   Просто напиши .ai и прикрепи фото!\n\n"
+    "🔕 <b>Фильтр своих сообщений</b>\n"
+    "   Бот больше не уведомляет когда ты сам\n"
+    "   удаляешь или редактируешь свои сообщения.\n\n"
+    "📢 <b>Работа в группах и каналах</b>\n"
+    "   Добавь бота в группу/канал и пиши .ai вопрос\n"
+    "   прямо там — бот ответит в чат.\n\n"
+    "🗑 <b>Умные уведомления</b>\n"
+    "   Старое уведомление удаляется при новом —\n"
+    "   чат не засоряется, всё чисто и удобно.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "🔥 Бот полностью бесплатный · ИИ без лимитов\n"
+    "👥 Расскажи друзьям — помоги проекту расти!"
+)
+
+
+async def _broadcast_devlog():
+    """Рассылает DevLog всем пользователям."""
+    ids = await db.all_user_ids()
+    ok = 0
+    fail = 0
+    for uid in ids:
+        try:
+            await bot.send_message(uid, DEVLOG)
+            ok += 1
+            await asyncio.sleep(0.05)  # не спамим Telegram API
+        except Exception:
+            fail += 1
+    log.info(f"📢 DevLog разослан: ok={ok} fail={fail}")
+    try:
+        await bot.send_message(ADMIN_ID, f"📢 DevLog разослан: ✅ {ok} · ❌ {fail}")
+    except Exception:
+        pass
+
+
 async def main():
     await db.init_db()
     log.info("🚀 SavedMessages Bot v3.0 запускается...")
@@ -1179,6 +1321,8 @@ async def main():
         )
     except Exception:
         pass
+    # Рассылаем DevLog при запуске
+    asyncio.create_task(_broadcast_devlog())
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
