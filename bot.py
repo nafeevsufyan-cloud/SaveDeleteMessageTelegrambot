@@ -84,7 +84,6 @@ class S(StatesGroup):
     ai_search    = State()
     suggest_idea = State()
     broadcast    = State()
-    video_dl     = State()
 
 
 # ══════════════════════════════════════════════════════
@@ -194,7 +193,6 @@ def kb_main(uid: int, is_prem: bool) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="🔎 Поиск по архиву", callback_data="search")])
     # Блок ИИ
     rows.append([InlineKeyboardButton(text="🖤 ИИ-консьерж — без лимитов", callback_data="ai_open")])
-    rows.append([InlineKeyboardButton(text="📥 Скачать видео · YouTube / TikTok / Inst", callback_data="video_dl")])
     # Блок прочего
     rows.append([
         InlineKeyboardButton(text="🤝 Приглашения", callback_data="referrals"),
@@ -1131,16 +1129,40 @@ async def cb_show_all(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ack_"))
 async def cb_ack(call: CallbackQuery):
+    uid     = call.from_user.id
+    is_prem = await db.is_premium(uid)
+    status  = "VIP-статус" if is_prem else "Базовый доступ"
     await call.answer("✔ Принято")
-    await call.message.edit_reply_markup(reply_markup=None)
+    await call.message.edit_text(
+        f"👁️ <b>QUIET MOD</b>\n"
+        f"<code>{LINE}</code>\n\n"
+        f"◆ Статус:    <b>{status}</b>\n"
+        f"◆ Перехват:  <b>безлимит</b>\n"
+        f"◆ Архив:     <b>{'200' if is_prem else '20'} записей</b>\n"
+        f"◆ ИИ:        <b>без лимитов</b>\n"
+        f"<code>{LINE}</code>",
+        reply_markup=kb_main(uid, is_prem),
+    )
 
 
 @dp.callback_query(F.data.startswith("del_"))
 async def cb_del(call: CallbackQuery):
-    msg_id = int(call.data.split("_")[1])
-    await db.delete_message(call.from_user.id, msg_id)
+    msg_id  = int(call.data.split("_")[1])
+    uid     = call.from_user.id
+    is_prem = await db.is_premium(uid)
+    status  = "VIP-статус" if is_prem else "Базовый доступ"
+    await db.delete_message(uid, msg_id)
     await call.answer("✕ Удалено из архива")
-    await call.message.edit_reply_markup(reply_markup=None)
+    await call.message.edit_text(
+        f"👁️ <b>QUIET MOD</b>\n"
+        f"<code>{LINE}</code>\n\n"
+        f"◆ Статус:    <b>{status}</b>\n"
+        f"◆ Перехват:  <b>безлимит</b>\n"
+        f"◆ Архив:     <b>{'200' if is_prem else '20'} записей</b>\n"
+        f"◆ ИИ:        <b>без лимитов</b>\n"
+        f"<code>{LINE}</code>",
+        reply_markup=kb_main(uid, is_prem),
+    )
 
 
 # ══════════════════════════════════════════════════════
@@ -1520,150 +1542,6 @@ async def on_idea_input(msg: Message, state: FSMContext):
         )
     except Exception:
         pass
-
-
-# ══════════════════════════════════════════════════════
-#  СКАЧИВАНИЕ ВИДЕО (yt-dlp)
-# ══════════════════════════════════════════════════════
-SUPPORTED_DOMAINS = [
-    "youtube.com", "youtu.be",
-    "tiktok.com", "vm.tiktok.com",
-    "instagram.com", "instagr.am",
-    "twitter.com", "x.com",
-    "vk.com", "ok.ru",
-    "rutube.ru",
-]
-
-MAX_VIDEO_MB = 50  # Telegram лимит для ботов
-
-
-def _is_supported_url(url: str) -> bool:
-    return any(d in url for d in SUPPORTED_DOMAINS)
-
-
-async def _download_video(url: str) -> tuple[Optional[str], Optional[str]]:
-    """
-    Скачивает видео через yt-dlp.
-    Возвращает (путь к файлу, None) или (None, сообщение об ошибке).
-    """
-    import tempfile, subprocess, os
-    tmp_dir = tempfile.mkdtemp()
-    out_tmpl = os.path.join(tmp_dir, "%(id)s.%(ext)s")
-    cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "--max-filesize", f"{MAX_VIDEO_MB}M",
-        "-f", "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best[height<=720]/best",
-        "--merge-output-format", "mp4",
-        "-o", out_tmpl,
-        "--no-warnings",
-        "--quiet",
-        url,
-    ]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        if proc.returncode != 0:
-            err = stderr.decode(errors="ignore").strip()
-            log.warning(f"yt-dlp error: {err[:300]}")
-            if "File is larger than max-filesize" in err:
-                return None, "✕ Видео слишком большое — максимум 50MB"
-            if "Private video" in err or "not available" in err:
-                return None, "✕ Видео недоступно или приватное"
-            return None, "✕ Не удалось скачать — возможно ссылка недействительна"
-        # Находим скачанный файл
-        files = [os.path.join(tmp_dir, f) for f in os.listdir(tmp_dir)]
-        if not files:
-            return None, "✕ Файл не найден после скачивания"
-        return files[0], None
-    except asyncio.TimeoutError:
-        return None, "✕ Превышено время ожидания — попробуй ещё раз"
-    except Exception as e:
-        log.error(f"download_video: {e}")
-        return None, "✕ Внутренняя ошибка — попробуй позже"
-
-
-@dp.callback_query(F.data == "video_dl")
-async def cb_video_dl(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    await state.set_state(S.video_dl)
-    await call.message.edit_text(
-        f"📥 <b>Скачать видео</b>\n{LINE}\n\n"
-        "Отправь ссылку на видео:\n\n"
-        "✔ YouTube · TikTok · Instagram\n"
-        "✔ Twitter/X · VK · Rutube · OK\n\n"
-        f"◇ Максимальный размер: <b>50MB</b>\n"
-        f"◇ Качество: до <b>720p</b>",
-        reply_markup=kb_back("menu"),
-    )
-
-
-@dp.message(S.video_dl)
-async def on_video_dl_url(msg: Message, state: FSMContext):
-    if not msg.text:
-        await msg.answer("◇ Отправь ссылку текстом.")
-        return
-
-    url = msg.text.strip()
-    if not url.startswith("http"):
-        await msg.answer("◇ Это не похоже на ссылку. Попробуй ещё раз.")
-        return
-
-    if not _is_supported_url(url):
-        await msg.answer(
-            "◇ Сайт может не поддерживаться.\n"
-            "Попробую скачать — это займёт немного времени..."
-        )
-
-    await state.clear()
-    status = await msg.answer("◆ · · · Скачиваю...")
-
-    file_path, error = await _download_video(url)
-
-    if error:
-        await status.edit_text(
-            f"{error}\n\n"
-            f"<i>Попробуй другую ссылку или нажми кнопку ниже.</i>",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📥 Попробовать снова", callback_data="video_dl")],
-                [InlineKeyboardButton(text="← В меню", callback_data="back_menu")],
-            ])
-        )
-        return
-
-    try:
-        await status.edit_text("◆ Загружаю в Telegram...")
-        import os
-        size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        with open(file_path, "rb") as f:
-            await bot.send_video(
-                msg.from_user.id,
-                f,
-                caption=(
-                    f"📥 <b>Готово!</b>\n"
-                    f"◆ Размер: {size_mb:.1f} MB\n"
-                    f"◇ {url[:60]}{'...' if len(url) > 60 else ''}"
-                ),
-                supports_streaming=True,
-            )
-        await status.delete()
-    except Exception as e:
-        log.error(f"send video: {e}")
-        await status.edit_text(
-            "✕ Не удалось отправить файл — возможно он слишком большой для Telegram.",
-            reply_markup=kb_back("menu"),
-        )
-    finally:
-        # Чистим временные файлы
-        try:
-            import shutil, os
-            shutil.rmtree(os.path.dirname(file_path), ignore_errors=True)
-        except Exception:
-            pass
 
 
 # ══════════════════════════════════════════════════════
