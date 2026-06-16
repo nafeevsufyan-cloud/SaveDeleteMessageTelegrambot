@@ -39,7 +39,7 @@ BOT_TOKEN    = os.environ["BOT_TOKEN"]
 ADMIN_ID     = int(os.environ["ADMIN_ID"])
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BOT_USERNAME = "Quiet_Mod_bot"  # фиксированное имя — не зависит от старой переменной окружения
-GROQ_MODEL   = "meta-llama/llama-4-maverick-17b-128e-instruct"  # актуальная vision-модель Groq, мультимодальная, видит фото
+GROQ_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"  # мультимодальная, бесплатная, видит фото
 
 # Название бренда (используется в текстах)
 BRAND_NAME = "Quiet Mod 👁️"
@@ -317,7 +317,7 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
     """
     Отправляет сообщение в Groq.
     image_base64 — опционально, если пользователь отправил фото.
-    Llama 4 Maverick понимает изображения нативно.
+    Llama 4 Scout понимает изображения нативно.
     """
     # Проверяем пасхалки до обращения к API
     egg = _check_easter_egg(user_msg)
@@ -836,7 +836,7 @@ async def cb_ai_open(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.edit_text(
         f"🖤 <b>ИИ-консьерж</b>\n{LINE}\n"
-        f"Модель: <b>Llama 4 Maverick · Vision</b>\n"
+        f"Модель: <b>Llama 4 Scout · Vision</b>\n"
         f"Лимит: <b>без ограничений</b>\n\n"
         "Спрашивай что угодно — отвечу тихо и быстро ◆",
         reply_markup=kb_ai(),
@@ -1648,7 +1648,7 @@ async def main():
         await bot.send_message(
             ADMIN_ID,
             f"✔ <b>Бот запущен</b> · Quiet Mod 👁️ · SQLite · Railway\n"
-            f"🤖 Модель: Llama 4 Maverick (Vision)"
+            f"🤖 Модель: Llama 4 Scout (Vision)"
         )
     except Exception:
         pass
