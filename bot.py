@@ -262,25 +262,9 @@ def kb_admin() -> InlineKeyboardMarkup:
 #  GROQ AI  (без лимитов — Groq бесплатный)
 # ══════════════════════════════════════════════════════
 SYSTEM_PROMPT = (
-    "Ты умный ИИ-консьерж внутри Telegram-бота Quiet Mod. "
-    "Отвечай чётко, без лишней воды. Язык — язык пользователя.\n\n"
-
-    "ФОРМАТИРОВАНИЕ (строго соблюдай):\n"
-    "- Весь код оборачивай в <code>...</code> — даже однострочный\n"
-    "- Для многострочного кода: <pre><code>...</code></pre>\n"
-    "- Жирный текст: <b>слово</b>\n"
-    "- Курсив: <i>слово</i>\n"
-    "- НИКОГДА не используй символы * ** ` ``` — только HTML теги выше\n"
-    "- НИКОГДА не используй markdown разметку\n\n"
-
-    "ЕСЛИ ВОПРОС ПРО КОД:\n"
-    "1. Сначала дай чёткий ответ с готовым кодом\n"
-    "2. Объясни что делает код (кратко)\n"
-    "3. В конце добавь раздел:\n"
-    "<b>💡 Что можно улучшить:</b>\n"
-    "— перечисли 2-3 конкретных идеи как сделать код лучше, надёжнее или умнее\n\n"
-
-    "СТИЛЬ: лаконичный, умный, без воды. Как опытный разработчик который уважает время собеседника."
+    "Ты сдержанный, элегантный ИИ-консьерж внутри Telegram-бота Quiet Mod. "
+    "Отвечай чётко, без лишней воды. Язык — язык пользователя. "
+    "Будь дружелюбным и полезным, держи стиль лаконичного люкса."
 )
 
 
@@ -528,12 +512,6 @@ def _needs_search(reply: str, user_msg: str) -> bool:
         "сейчас", "последние", "актуальн", "2024", "2025", "2026",
         "вышел", "выйдет", "релиз", "обновление", "версия",
         "кто выиграл", "результат", "счёт", "матч",
-        # Технические — лучше искать актуальные доки
-        "библиотек", "фреймворк", "как установить", "как подключить",
-        "aiogram", "python", "javascript", "api", "telegram bot",
-        "ошибка", "error", "traceback", "exception", "не работает",
-        "как сделать", "пример кода", "tutorial", "документация",
-        "docker", "railway", "deploy", "хостинг",
     ]
 
     if any(p in reply_lower for p in uncertainty_phrases):
@@ -581,75 +559,6 @@ async def _groq_request(messages: list, max_tokens: int = 2048, temperature: flo
         return None
 
 
-def _md_to_tg_html(text: str) -> str:
-    """
-    Конвертирует Markdown-ответ ИИ в HTML для Telegram.
-    Порядок важен: сначала блоки кода, потом инлайн.
-    """
-    import re
-
-    # 1. Блоки кода ```lang\n...\n``` → <pre><code>...</code></pre>
-    def replace_code_block(m):
-        code = m.group(2).strip()
-        # Экранируем HTML внутри кода
-        code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        return f"<pre><code>{code}</code></pre>"
-
-    text = re.sub(r"```(\w*)\n?([\s\S]*?)```", replace_code_block, text)
-
-    # 2. Инлайн код `код` → <code>код</code>
-    def replace_inline_code(m):
-        code = m.group(1)
-        code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        return f"<code>{code}</code>"
-
-    text = re.sub(r"`([^`\n]+)`", replace_inline_code, text)
-
-    # 3. Жирный **текст** или __текст__ → <b>текст</b>
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"__(.+?)__", r"<b>\1</b>", text)
-
-    # 4. Курсив *текст* или _текст_ → <i>текст</i>  (только если не внутри <b>)
-    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", text)
-    text = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", text)
-
-    # 5. Экранируем оставшиеся & < > вне тегов
-    # (только те которые не внутри уже существующих тегов)
-    result = []
-    i = 0
-    while i < len(text):
-        if text[i] == "<":
-            # Проверяем — это наш HTML тег или нет
-            tag_end = text.find(">", i)
-            if tag_end != -1:
-                tag = text[i:tag_end+1]
-                known = ("</b>", "</i>", "</code>", "</pre>",
-                         "<b>", "<i>", "<code>", "<pre>", "</pre><code>",
-                         "<pre><code>")
-                if any(tag.startswith(k.split(">")[0]) for k in
-                       ("<b", "<i", "<code", "<pre", "</b", "</i", "</code", "</pre")):
-                    result.append(tag)
-                    i = tag_end + 1
-                    continue
-            result.append("&lt;")
-            i += 1
-        elif text[i] == ">" and (not result or result[-1][-1] != ">"):
-            result.append("&gt;")
-            i += 1
-        elif text[i] == "&" and not text[i:i+4] in ("&lt;", "&gt;", "&amp;"):
-            # проверяем — не &lt; уже
-            if text[i:i+5] in ("&amp;", "&lt;g", "&gt;g"):
-                result.append(text[i])
-            else:
-                result.append("&amp;")
-            i += 1
-        else:
-            result.append(text[i])
-            i += 1
-
-    return "".join(result)
-
-
 async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None) -> str:
     """
     Отправляет сообщение в Groq.
@@ -691,9 +600,6 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
     if reply is None:
         return "⚠️ ИИ временно недоступен — попробуй позже."
 
-    # Конвертируем Markdown → Telegram HTML
-    reply = _md_to_tg_html(reply)
-
     # Проверяем — нужен ли поиск (только для текстовых запросов, не фото)
     if not image_base64 and _needs_search(reply, user_msg):
         log.info(f"🔍 Auto-search triggered for uid={uid}: {user_msg[:60]}")
@@ -731,7 +637,7 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
             ]
             reply_with_search = await _groq_request(augmented_messages)
             if reply_with_search:
-                reply = _md_to_tg_html(reply_with_search) + "\n\n🔍 <i>ответ дополнен поиском</i>"
+                reply = reply_with_search + "\n\n🔍 <i>ответ дополнен поиском</i>"
                 log.info(f"🔍 Search augmented reply for uid={uid}")
 
     # Сохраняем в историю
@@ -889,7 +795,7 @@ async def on_ai_inline(msg: Message):
     answer = await groq_chat(owner_id, question or "Опиши что на фото.", image_base64=image_b64)
 
     # Шаг 4: редактируем → ответ + подпись
-    result_text = f"{answer}\n\n— 👁️ @{BOT_USERNAME}"
+    result_text = f"{html_escape(answer)}\n\n— 👁️ @{BOT_USERNAME}"
     await _business_edit_message(
         msg.business_connection_id, msg.chat.id, msg.message_id,
         result_text
@@ -1347,7 +1253,7 @@ async def ai_msg(msg: Message, state: FSMContext):
 
     reply = await groq_chat(uid, text_content, image_base64=image_b64)
     await thinking.delete()
-    await msg.answer(f"👁️ {reply}", reply_markup=kb_ai())
+    await msg.answer(f"👁️ {html_escape(reply)}", reply_markup=kb_ai())
 
 
 @dp.callback_query(F.data == "ai_clear")
