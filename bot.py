@@ -313,48 +313,102 @@ def _check_easter_egg(text: str) -> Optional[str]:
     return None
 
 
-async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None) -> str:
+async def _ddg_search(query: str, max_results: int = 4) -> str:
     """
-    Отправляет сообщение в Groq.
-    image_base64 — опционально, если пользователь отправил фото.
-    Llama 4 Scout понимает изображения нативно.
+    Поиск через DuckDuckGo (бесплатно, без API ключа).
+    Возвращает краткие сниппеты результатов в виде текста.
     """
-    # Проверяем пасхалки до обращения к API
-    egg = _check_easter_egg(user_msg)
-    if egg:
-        return egg
+    try:
+        url = "https://api.duckduckgo.com/"
+        params = {
+            "q": query,
+            "format": "json",
+            "no_html": "1",
+            "skip_disambig": "1",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return ""
+                import json as _json
+                data = _json.loads(await resp.text())
 
-    history = ai_history.setdefault(uid, [])
+        results = []
 
-    # Формируем контент текущего сообщения
-    if image_base64:
-        # Multimodal: текст + фото
-        content = [
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{image_base64}"
-                }
-            },
-            {
-                "type": "text",
-                "text": user_msg if user_msg else "Опиши что на фото."
-            }
-        ]
-    else:
-        content = user_msg
+        # AbstractText — краткий ответ DuckDuckGo
+        if data.get("AbstractText"):
+            results.append(data["AbstractText"])
 
-    history.append({"role": "user", "content": content})
-    # Держим последние 10 пар (история с фото весит много)
-    if len(history) > 10:
-        ai_history[uid] = history[-10:]
-        history = ai_history[uid]
+        # RelatedTopics — похожие темы со сниппетами
+        for topic in data.get("RelatedTopics", [])[:max_results]:
+            text = topic.get("Text", "")
+            if text:
+                results.append(text)
 
+        if results:
+            return "\n\n".join(results[:max_results])
+
+        # Если DDG instant answer пуст — пробуем HTML поиск (парсинг сниппетов)
+        search_url = f"https://html.duckduckgo.com/html/?q={aiohttp.helpers.requote_uri(query)}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                search_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    return ""
+                html = await resp.text()
+
+        # Простой парсинг сниппетов
+        import re as _re
+        snippets = _re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, _re.DOTALL)
+        clean = [_re.sub(r"<[^>]+>", "", s).strip() for s in snippets[:max_results]]
+        return "\n\n".join(filter(None, clean))
+
+    except Exception as e:
+        log.warning(f"DDG search error: {e}")
+        return ""
+
+
+def _needs_search(reply: str, user_msg: str) -> bool:
+    """
+    Определяет нужен ли поиск — по ответу ИИ или по характеру вопроса.
+    """
+    reply_lower = reply.lower()
+
+    # Фразы когда ИИ признаётся что не знает / данные устарели
+    uncertainty_phrases = [
+        "не знаю", "не могу знать", "нет информации", "нет данных",
+        "актуальн", "последн", "свежи", "сейчас", "на данный момент",
+        "у меня нет доступа", "моя информация", "обрати́сь к",
+        "рекомендую проверить", "уточни", "не уверен",
+        "cannot", "don't know", "i don't have", "as of my",
+        "my knowledge", "i'm not sure", "check online",
+    ]
+
+    # Ключевые слова в вопросе пользователя — явно требуют свежих данных
+    search_triggers = [
+        "курс", "цена", "стоимость", "погода", "новости", "сегодня",
+        "сейчас", "последние", "актуальн", "2024", "2025", "2026",
+        "вышел", "выйдет", "релиз", "обновление", "версия",
+        "кто выиграл", "результат", "счёт", "матч",
+    ]
+
+    if any(p in reply_lower for p in uncertainty_phrases):
+        return True
+    if any(t in user_msg.lower() for t in search_triggers):
+        return True
+    return False
+
+
+async def _groq_request(messages: list, max_tokens: int = 2048, temperature: float = 0.7) -> Optional[str]:
+    """Базовый запрос к Groq API."""
     payload = {
         "model": GROQ_MODEL,
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + history,
-        "max_tokens": 2048,
-        "temperature": 0.7,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
     }
     try:
         async with aiohttp.ClientSession() as session:
@@ -367,25 +421,94 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=45),
             ) as resp:
+                import json as _json
                 raw = await resp.text()
                 try:
-                    import json as _json
                     data = _json.loads(raw)
                 except Exception:
                     log.error(f"Groq non-JSON (status {resp.status}): {raw[:300]}")
-                    return "⚠️ ИИ временно недоступен — попробуй позже."
+                    return None
                 if "choices" not in data:
                     log.error(f"Groq unexpected: {data}")
-                    return "⚠️ ИИ вернул неожиданный ответ — попробуй ещё раз."
-                reply = data["choices"][0]["message"]["content"].strip()
-                # В историю кладём только текст ответа (без base64)
-                ai_history[uid].append({"role": "assistant", "content": reply})
-                return reply
+                    return None
+                return data["choices"][0]["message"]["content"].strip()
     except asyncio.TimeoutError:
-        return "⚠️ ИИ не ответил вовремя — попробуй позже."
+        log.warning("Groq timeout")
+        return None
     except Exception as e:
-        log.error(f"Groq: {e}")
+        log.error(f"Groq request: {e}")
+        return None
+
+
+async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None) -> str:
+    """
+    Отправляет сообщение в Groq.
+    Если ИИ не знает ответ — автоматически ищет в DuckDuckGo и отвечает повторно.
+    image_base64 — опционально, если пользователь отправил фото.
+    Llama 4 Scout понимает изображения нативно.
+    """
+    # Проверяем пасхалки до обращения к API
+    egg = _check_easter_egg(user_msg)
+    if egg:
+        return egg
+
+    history = ai_history.setdefault(uid, [])
+
+    # Формируем контент текущего сообщения
+    if image_base64:
+        content = [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+            },
+            {
+                "type": "text",
+                "text": user_msg if user_msg else "Опиши что на фото."
+            }
+        ]
+    else:
+        content = user_msg
+
+    history.append({"role": "user", "content": content})
+    if len(history) > 10:
+        ai_history[uid] = history[-10:]
+        history = ai_history[uid]
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+
+    # Первый запрос к ИИ
+    reply = await _groq_request(messages)
+    if reply is None:
         return "⚠️ ИИ временно недоступен — попробуй позже."
+
+    # Проверяем — нужен ли поиск (только для текстовых запросов, не фото)
+    if not image_base64 and _needs_search(reply, user_msg):
+        log.info(f"🔍 Auto-search triggered for uid={uid}: {user_msg[:60]}")
+        search_results = await _ddg_search(user_msg)
+
+        if search_results:
+            # Второй запрос с результатами поиска
+            augmented_messages = messages + [
+                {"role": "assistant", "content": reply},
+                {
+                    "role": "user",
+                    "content": (
+                        f"[Результаты поиска по запросу «{user_msg}»]\n\n"
+                        f"{search_results}\n\n"
+                        "На основе этих данных дай актуальный и точный ответ. "
+                        "Если информация из поиска полезна — используй её. "
+                        "Отвечай на языке пользователя, кратко и по делу."
+                    )
+                }
+            ]
+            reply_with_search = await _groq_request(augmented_messages)
+            if reply_with_search:
+                reply = reply_with_search + "\n\n🔍 <i>ответ дополнен поиском</i>"
+                log.info(f"🔍 Search augmented reply for uid={uid}")
+
+    # Сохраняем в историю
+    ai_history[uid].append({"role": "assistant", "content": reply})
+    return reply
 
 
 # ══════════════════════════════════════════════════════
@@ -589,6 +712,112 @@ async def on_ai_group(msg: Message):
 
 
 # ══════════════════════════════════════════════════════
+#  .search КОМАНДА В БИЗНЕС-ЧАТЕ
+#  Пишешь: .search запрос
+#  Бот ищет в интернете и редактирует твоё сообщение
+# ══════════════════════════════════════════════════════
+@dp.business_message(F.text.regexp(r"(?i)^\.search\s+.+"))
+async def on_search_inline(msg: Message):
+    """Поиск в бизнес-чате — редактирует сообщение владельца."""
+    if not msg.business_connection_id:
+        return
+
+    try:
+        conn = await bot.get_business_connection(msg.business_connection_id)
+        owner_id = conn.user.id
+    except Exception as e:
+        log.error(f"get_business_connection (.search): {e}")
+        return
+
+    if not msg.from_user or msg.from_user.id != owner_id:
+        return
+
+    raw_text = msg.text or ""
+    query = raw_text[raw_text.index(" ") + 1:].strip() if " " in raw_text else ""
+    if not query:
+        return
+
+    # Анимация ожидания
+    ok = await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "🔍 ·")
+    if not ok:
+        return
+    await asyncio.sleep(1)
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "🔍 · ·")
+    await asyncio.sleep(1)
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "🔍 · · ·")
+    await asyncio.sleep(1)
+
+    # Поиск + ответ ИИ
+    search_results = await _ddg_search(query)
+    if search_results:
+        prompt = (
+            f"Пользователь ищет: «{query}»\n\n"
+            f"Результаты поиска:\n{search_results}\n\n"
+            "Дай чёткий и актуальный ответ на основе этих данных. Кратко, по делу."
+        )
+    else:
+        prompt = f"Найди и расскажи всё что знаешь про: {query}"
+
+    answer = await _groq_request([
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ])
+    if not answer:
+        answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
+
+    result_text = f"🔍 {html_escape(answer)}\n\n— 👁️ @{BOT_USERNAME}"
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, result_text)
+    log.info(f"🔍 .search done owner={owner_id} query={query[:50]}")
+
+
+# ══════════════════════════════════════════════════════
+#  .search КОМАНДА В ГРУППАХ И КАНАЛАХ
+# ══════════════════════════════════════════════════════
+@dp.message(F.text.regexp(r"(?i)^\.search\s+.+"), F.chat.type.in_({"group", "supergroup", "channel"}))
+async def on_search_group(msg: Message):
+    """.search в группах/каналах — отвечает в том же чате."""
+    if not msg.from_user:
+        return
+
+    uid = msg.from_user.id
+    raw_text = msg.text or ""
+    query = raw_text[raw_text.index(" ") + 1:].strip() if " " in raw_text else ""
+    if not query:
+        return
+
+    await db.upsert_user(uid, msg.from_user.username or "", msg.from_user.full_name or "")
+    thinking = await msg.reply("🔍 · · ·")
+
+    search_results = await _ddg_search(query)
+    if search_results:
+        prompt = (
+            f"Пользователь ищет: «{query}»\n\n"
+            f"Результаты поиска:\n{search_results}\n\n"
+            "Дай чёткий и актуальный ответ на основе этих данных. Кратко, по делу."
+        )
+    else:
+        prompt = f"Найди и расскажи всё что знаешь про: {query}"
+
+    answer = await _groq_request([
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ])
+    if not answer:
+        answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
+
+    try:
+        await thinking.edit_text(f"🔍 {html_escape(answer)}")
+    except Exception:
+        try:
+            await thinking.delete()
+            await msg.reply(f"🔍 {html_escape(answer)}")
+        except Exception as e:
+            log.error(f"search_group reply: {e}")
+
+    log.info(f"🔍 .search group chat={msg.chat.id} user={uid} query={query[:50]}")
+
+
+# ══════════════════════════════════════════════════════
 #  КЭШИРОВАНИЕ БИЗНЕС-СООБЩЕНИЙ
 #  FIX: owner_id = business_connection_id → user.id
 # ══════════════════════════════════════════════════════
@@ -601,8 +830,8 @@ async def on_business_msg(msg: Message):
     if not msg.business_connection_id:
         return
 
-    # Не кэшируем .ai команды — они будут отредактированы в ответ ИИ
-    if msg.text and msg.text.lower().startswith(".ai "):
+    # Не кэшируем .ai и .search команды — они будут отредактированы
+    if msg.text and (msg.text.lower().startswith(".ai ") or msg.text.lower().startswith(".search ")):
         return
 
     try:
