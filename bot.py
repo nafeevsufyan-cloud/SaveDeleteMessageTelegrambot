@@ -12,6 +12,7 @@ from datetime import date, timedelta, timezone
 from typing import Optional
 
 import aiohttp
+from ddgs import DDGS
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -313,62 +314,180 @@ def _check_easter_egg(text: str) -> Optional[str]:
     return None
 
 
-async def _ddg_search(query: str, max_results: int = 4) -> str:
+def _ddg_text_sync(query: str, max_results: int = 5) -> list:
+    """Синхронный текстовый поиск (вызывается через to_thread — библиотека блокирующая)."""
+    try:
+        return DDGS().text(query, region="ru-ru", safesearch="moderate", max_results=max_results)
+    except Exception as e:
+        log.warning(f"ddgs.text error: {e}")
+        return []
+
+
+def _ddg_news_sync(query: str, max_results: int = 5) -> list:
+    """Синхронный поиск новостей (вызывается через to_thread)."""
+    try:
+        return DDGS().news(query, region="ru-ru", safesearch="moderate", max_results=max_results)
+    except Exception as e:
+        log.warning(f"ddgs.news error: {e}")
+        return []
+
+
+async def _ddg_search(query: str, max_results: int = 5) -> str:
     """
-    Поиск через DuckDuckGo (бесплатно, без API ключа).
-    Возвращает краткие сниппеты результатов в виде текста.
+    Поиск в интернете — бесплатно, без API-ключей.
+    Библиотека ddgs агрегирует DuckDuckGo / Bing / Brave / Yandex и т.п.
+    с автоматическим фолбэком между движками, поэтому надёжнее ручного
+    парсинга html.duckduckgo.com (который часто блокируется/меняется).
     """
     try:
-        url = "https://api.duckduckgo.com/"
-        params = {
-            "q": query,
-            "format": "json",
-            "no_html": "1",
-            "skip_disambig": "1",
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return ""
-                import json as _json
-                data = _json.loads(await resp.text())
+        is_news = any(w in query.lower() for w in ("новост", "news", "событ"))
 
-        results = []
+        if is_news:
+            results = await asyncio.to_thread(_ddg_news_sync, query, max_results)
+            lines = [
+                f"{r.get('title', '')} ({(r.get('date') or '')[:10]}): {r.get('body', '')}".strip()
+                for r in results if r.get("title") or r.get("body")
+            ]
+            if lines:
+                return "\n\n".join(lines)
 
-        # AbstractText — краткий ответ DuckDuckGo
-        if data.get("AbstractText"):
-            results.append(data["AbstractText"])
-
-        # RelatedTopics — похожие темы со сниппетами
-        for topic in data.get("RelatedTopics", [])[:max_results]:
-            text = topic.get("Text", "")
-            if text:
-                results.append(text)
-
-        if results:
-            return "\n\n".join(results[:max_results])
-
-        # Если DDG instant answer пуст — пробуем HTML поиск (парсинг сниппетов)
-        search_url = f"https://html.duckduckgo.com/html/?q={aiohttp.helpers.requote_uri(query)}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                search_url,
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status != 200:
-                    return ""
-                html = await resp.text()
-
-        # Простой парсинг сниппетов
-        import re as _re
-        snippets = _re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, _re.DOTALL)
-        clean = [_re.sub(r"<[^>]+>", "", s).strip() for s in snippets[:max_results]]
-        return "\n\n".join(filter(None, clean))
+        results = await asyncio.to_thread(_ddg_text_sync, query, max_results)
+        lines = [
+            f"{r.get('title', '')}: {r.get('body', '')}".strip(": ")
+            for r in results if r.get("title") or r.get("body")
+        ]
+        return "\n\n".join(lines)
 
     except Exception as e:
         log.warning(f"DDG search error: {e}")
         return ""
+
+
+# ══════════════════════════════════════════════════════
+#  ПОГОДА — Open-Meteo (бесплатно, без ключа, точные данные)
+#  DDG не годится для погоды (нет реалтайм-данных в выдаче),
+#  поэтому отдельный канал с гарантированно точными цифрами.
+# ══════════════════════════════════════════════════════
+WEATHER_CODES: dict[int, str] = {
+    0: "☀️ Ясно",
+    1: "🌤 Преимущественно ясно",
+    2: "⛅ Переменная облачность",
+    3: "☁️ Облачно",
+    45: "🌫 Туман",
+    48: "🌫 Изморозь",
+    51: "🌦 Лёгкая морось",
+    53: "🌦 Морось",
+    55: "🌧 Сильная морось",
+    56: "🌧 Ледяная морось",
+    57: "🌧 Сильная ледяная морось",
+    61: "🌧 Небольшой дождь",
+    63: "🌧 Дождь",
+    65: "🌧 Сильный дождь",
+    66: "🌧 Ледяной дождь",
+    67: "🌧 Сильный ледяной дождь",
+    71: "🌨 Небольшой снег",
+    73: "🌨 Снег",
+    75: "❄️ Сильный снегопад",
+    77: "❄️ Снежные зёрна",
+    80: "🌧 Небольшие ливни",
+    81: "🌧 Ливни",
+    82: "⛈ Сильные ливни",
+    85: "🌨 Небольшой снегопад",
+    86: "❄️ Сильный снегопад",
+    95: "⛈ Гроза",
+    96: "⛈ Гроза с градом",
+    99: "⛈ Сильная гроза с градом",
+}
+
+WEATHER_TRIGGERS = ("погод", "weather", "температур")
+
+
+def _is_weather_query(text: str) -> bool:
+    return any(k in text.lower() for k in WEATHER_TRIGGERS)
+
+
+def _extract_city(text: str) -> str:
+    """Достаёт название города из запроса о погоде ('погода в Москве' → 'Москве')."""
+    t = f" {text.strip().lower()} "
+    for kw in ("погодка", "погода", "погоду", "погоде", "weather",
+               "температура", "температуру", "температуре"):
+        t = t.replace(kw, " ")
+    for w in (" в ", " на ", " по ", " какая ", " какой ", " сегодня ", " сейчас ", " завтра ",
+              " прямо ", " там ", " in ", " at ", " is ", " the ", " today ", " now ", "?"):
+        t = t.replace(w, " ")
+    return t.strip(" ?!.,")
+
+
+async def _geocode_city(session: aiohttp.ClientSession, city: str) -> Optional[dict]:
+    """Ищет координаты города, с учётом русских падежей (Москве → Москва)."""
+    candidates = [city]
+    if len(city) > 4:
+        candidates += [city[:-1], city[:-1] + "а", city[:-2]]
+    for cand in candidates:
+        try:
+            async with session.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": cand, "count": 1, "language": "ru", "format": "json"},
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as resp:
+                if resp.status != 200:
+                    continue
+                data = await resp.json()
+                results = data.get("results")
+                if results:
+                    return results[0]
+        except Exception:
+            continue
+    return None
+
+
+async def _get_weather(city: str) -> Optional[str]:
+    """Текущая погода через Open-Meteo — бесплатно, без ключа, реальные данные на сейчас."""
+    if not city:
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            loc = await _geocode_city(session, city)
+            if not loc:
+                return None
+            async with session.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": loc["latitude"],
+                    "longitude": loc["longitude"],
+                    "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code",
+                    "timezone": "auto",
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                wx = await resp.json()
+
+        cur = wx.get("current")
+        if not cur:
+            return None
+
+        temp  = round(cur["temperature_2m"])
+        feels = round(cur["apparent_temperature"])
+        hum   = round(cur["relative_humidity_2m"])
+        wind  = round(cur["wind_speed_10m"])
+        desc  = WEATHER_CODES.get(int(cur.get("weather_code", 0)), "🌡 Погода")
+
+        city_name = loc.get("name", city)
+        country   = loc.get("country", "")
+        loc_label = f"{city_name}, {country}" if country else city_name
+
+        return (
+            f"{desc}\n"
+            f"📍 {loc_label}\n"
+            f"🌡 Температура: {temp:+d}°C, ощущается как {feels:+d}°C\n"
+            f"💧 Влажность: {hum}%\n"
+            f"💨 Ветер: {wind} км/ч"
+        )
+    except Exception as e:
+        log.warning(f"Open-Meteo weather error: {e}")
+        return None
 
 
 def _needs_search(reply: str, user_msg: str) -> bool:
@@ -484,6 +603,21 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
     # Проверяем — нужен ли поиск (только для текстовых запросов, не фото)
     if not image_base64 and _needs_search(reply, user_msg):
         log.info(f"🔍 Auto-search triggered for uid={uid}: {user_msg[:60]}")
+
+        # Погода — отдельным точным каналом (DDG для погоды бесполезен)
+        if _is_weather_query(user_msg):
+            city = _extract_city(user_msg)
+            weather_text = await _get_weather(city) if city else None
+            if weather_text:
+                reply = weather_text + "\n\n🔍 <i>точные данные о погоде</i>"
+                ai_history[uid].append({"role": "assistant", "content": reply})
+                return reply
+            if city:
+                reply = f"⚠️ Не нашёл город «{city}» — уточни название и спроси ещё раз."
+                ai_history[uid].append({"role": "assistant", "content": reply})
+                return reply
+            # если города в запросе нет вовсе — пробуем как обычный поиск ниже
+
         search_results = await _ddg_search(user_msg)
 
         if search_results:
@@ -748,22 +882,32 @@ async def on_search_inline(msg: Message):
     await asyncio.sleep(1)
 
     # Поиск + ответ ИИ
-    search_results = await _ddg_search(query)
-    if search_results:
-        prompt = (
-            f"Пользователь ищет: «{query}»\n\n"
-            f"Результаты поиска:\n{search_results}\n\n"
-            "Дай чёткий и актуальный ответ на основе этих данных. Кратко, по делу."
-        )
+    if _is_weather_query(query):
+        city = _extract_city(query)
+        weather_text = await _get_weather(city) if city else None
+        if weather_text:
+            answer = weather_text
+        elif city:
+            answer = f"⚠️ Не нашёл город «{city}» — проверь название и попробуй ещё раз."
+        else:
+            answer = "🌤 Уточни город, например: .search погода в Москве"
     else:
-        prompt = f"Найди и расскажи всё что знаешь про: {query}"
+        search_results = await _ddg_search(query)
+        if search_results:
+            prompt = (
+                f"Пользователь ищет: «{query}»\n\n"
+                f"Результаты поиска:\n{search_results}\n\n"
+                "Дай чёткий и актуальный ответ на основе этих данных. Кратко, по делу."
+            )
+        else:
+            prompt = f"Найди и расскажи всё что знаешь про: {query}"
 
-    answer = await _groq_request([
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": prompt},
-    ])
-    if not answer:
-        answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
+        answer = await _groq_request([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        if not answer:
+            answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
 
     result_text = f"🔍 {html_escape(answer)}\n\n— 👁️ @{BOT_USERNAME}"
     await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, result_text)
@@ -788,22 +932,32 @@ async def on_search_group(msg: Message):
     await db.upsert_user(uid, msg.from_user.username or "", msg.from_user.full_name or "")
     thinking = await msg.reply("🔍 · · ·")
 
-    search_results = await _ddg_search(query)
-    if search_results:
-        prompt = (
-            f"Пользователь ищет: «{query}»\n\n"
-            f"Результаты поиска:\n{search_results}\n\n"
-            "Дай чёткий и актуальный ответ на основе этих данных. Кратко, по делу."
-        )
+    if _is_weather_query(query):
+        city = _extract_city(query)
+        weather_text = await _get_weather(city) if city else None
+        if weather_text:
+            answer = weather_text
+        elif city:
+            answer = f"⚠️ Не нашёл город «{city}» — проверь название и попробуй ещё раз."
+        else:
+            answer = "🌤 Уточни город, например: .search погода в Москве"
     else:
-        prompt = f"Найди и расскажи всё что знаешь про: {query}"
+        search_results = await _ddg_search(query)
+        if search_results:
+            prompt = (
+                f"Пользователь ищет: «{query}»\n\n"
+                f"Результаты поиска:\n{search_results}\n\n"
+                "Дай чёткий и актуальный ответ на основе этих данных. Кратко, по делу."
+            )
+        else:
+            prompt = f"Найди и расскажи всё что знаешь про: {query}"
 
-    answer = await _groq_request([
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": prompt},
-    ])
-    if not answer:
-        answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
+        answer = await _groq_request([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        if not answer:
+            answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
 
     try:
         await thinking.edit_text(f"🔍 {html_escape(answer)}")
