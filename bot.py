@@ -1144,6 +1144,36 @@ async def on_spam(msg: Message):
 
 
 # ══════════════════════════════════════════════════════
+#  МУТ — АВТОУДАЛЕНИЕ (регистрируется ПЕРВЫМ)
+# ══════════════════════════════════════════════════════
+@dp.business_message()
+async def on_mute_autodelete(msg: Message):
+    """Первый хендлер — удаляет сообщения замученного собеседника."""
+    if not msg.business_connection_id:
+        return
+
+    # Команды владельца пропускаем
+    if msg.text:
+        txt_low = msg.text.strip().lower()
+        if txt_low in (".mute", ".unmute") or txt_low.startswith(".spam ")                 or txt_low.startswith(".ai ") or txt_low.startswith(".search "):
+            return
+
+    try:
+        conn = await bot.get_business_connection(msg.business_connection_id)
+        owner_id = conn.user.id
+    except Exception as e:
+        log.error(f"get_business_connection (mute_autodelete): {e}")
+        return
+
+    sender_id = msg.from_user.id if msg.from_user else None
+    if sender_id and sender_id != owner_id:
+        if owner_id in muted_chats and msg.chat.id in muted_chats[owner_id]:
+            await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
+            log.info(f"🔇 auto-deleted muted msg={msg.message_id} chat={msg.chat.id} owner={owner_id}")
+            return  # сообщение удалено — кэшировать не нужно
+
+
+# ══════════════════════════════════════════════════════
 #  КЭШИРОВАНИЕ БИЗНЕС-СООБЩЕНИЙ
 #  FIX: owner_id = business_connection_id → user.id
 # ══════════════════════════════════════════════════════
@@ -1172,14 +1202,6 @@ async def on_business_msg(msg: Message):
     except Exception as e:
         log.error(f"get_business_connection (save): {e}")
         return
-
-    # Проверяем мут: удаляем сообщения от собеседника если чат замучен
-    sender_id = msg.from_user.id if msg.from_user else None
-    if sender_id and sender_id != owner_id:
-        if owner_id in muted_chats and msg.chat.id in muted_chats[owner_id]:
-            await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
-            log.info(f"🔇 auto-deleted muted msg={msg.message_id} chat={msg.chat.id} owner={owner_id}")
-            return
 
     media_type = "💬 Текст"
     file_id: Optional[str] = None
@@ -2221,8 +2243,7 @@ async def main():
         )
     except Exception:
         pass
-    # Рассылаем DevLog при запуске
-    asyncio.create_task(_broadcast_devlog())
+    # DevLog рассылка отключена
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
