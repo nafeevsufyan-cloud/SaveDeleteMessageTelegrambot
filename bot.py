@@ -76,9 +76,8 @@ last_notify_msg: dict[int, int] = {}
 # uid → message_id главного сообщения
 home_msg: dict[int, int] = {}
 
-# Замученные чаты: owner_id → set of chat_id
-# Если chat_id в сете — все входящие сообщения из этого чата удаляются
-muted_chats: dict[int, set[int]] = {}
+# Активные спам-задачи: owner_id → asyncio.Event (установить = стоп)
+spam_stop: dict[int, "asyncio.Event"] = {}
 
 
 # ══════════════════════════════════════════════════════
@@ -975,130 +974,40 @@ async def on_search_group(msg: Message):
     log.info(f"🔍 .search group chat={msg.chat.id} user={uid} query={query[:50]}")
 
 
-# ══════════════════════════════════════════════════════
-#  .mute / .unmute КОМАНДЫ В БИЗНЕС-ЧАТЕ
-#  .mute  — глушит собеседника (все его сообщения удаляются)
-#  .unmute — снимает мут
-# ══════════════════════════════════════════════════════
-
-async def _business_delete_message(conn_id: str, chat_id: int, msg_id: int) -> bool:
-    """Удаляет бизнес-сообщение через Bot API."""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-    payload = {
-        "business_connection_id": conn_id,
-        "chat_id": chat_id,
-        "message_id": msg_id,
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                data = await resp.json()
-                return data.get("ok", False)
-    except Exception as e:
-        log.warning(f"deleteMessage HTTP: {e}")
-        return False
-
-
-async def _business_send_message(conn_id: str, chat_id: int, text: str) -> bool:
-    """Отправляет сообщение в бизнес-чат через Bot API."""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "business_connection_id": conn_id,
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                data = await resp.json()
-                return data.get("ok", False)
-    except Exception as e:
-        log.warning(f"sendMessage HTTP: {e}")
-        return False
-
-
-@dp.business_message(F.text.regexp(r"(?i)^\.mute$"))
-async def on_mute(msg: Message):
-    """Замучивает собеседника — все его сообщения будут удаляться."""
-    if not msg.business_connection_id:
-        return
-
-    try:
-        conn = await bot.get_business_connection(msg.business_connection_id)
-        owner_id = conn.user.id
-    except Exception as e:
-        log.error(f"get_business_connection (.mute): {e}")
-        return
-
-    # Только владелец может использовать команду
-    if not msg.from_user or msg.from_user.id != owner_id:
-        return
-
-    chat_id = msg.chat.id
-
-    # Удаляем само сообщение с командой
-    await _business_delete_message(msg.business_connection_id, chat_id, msg.message_id)
-
-    # Добавляем чат в список замученных
-    if owner_id not in muted_chats:
-        muted_chats[owner_id] = set()
-    muted_chats[owner_id].add(chat_id)
-
-    # Отправляем уведомление прямо в чат с собеседником
-    await _business_send_message(
-        msg.business_connection_id,
-        chat_id,
-        "🔇 Собеседник замучен. Напишите .unmute для размута.",
-    )
-
-    log.info(f"🔇 .mute owner={owner_id} chat={chat_id}")
-
-
-@dp.business_message(F.text.regexp(r"(?i)^\.unmute$"))
-async def on_unmute(msg: Message):
-    """Снимает мут с собеседника."""
-    if not msg.business_connection_id:
-        return
-
-    try:
-        conn = await bot.get_business_connection(msg.business_connection_id)
-        owner_id = conn.user.id
-    except Exception as e:
-        log.error(f"get_business_connection (.unmute): {e}")
-        return
-
-    if not msg.from_user or msg.from_user.id != owner_id:
-        return
-
-    chat_id = msg.chat.id
-
-    # Удаляем само сообщение с командой
-    await _business_delete_message(msg.business_connection_id, chat_id, msg.message_id)
-
-    # Убираем чат из замученных
-    if owner_id in muted_chats:
-        muted_chats[owner_id].discard(chat_id)
-
-    # Отправляем уведомление прямо в чат с собеседником
-    await _business_send_message(
-        msg.business_connection_id,
-        chat_id,
-        "🔔 Собеседник размучен. Сообщения снова доходят.",
-    )
-
-    log.info(f"🔔 .unmute owner={owner_id} chat={chat_id}")
 
 
 # ══════════════════════════════════════════════════════
-#  .spam КОМАНДА В БИЗНЕС-ЧАТЕ
+#  .spam / .spam stop КОМАНДЫ В БИЗНЕС-ЧАТЕ
 #  Формат: .spam <текст> <число>
-#  Пример: .spam Привет 5
+#  Стоп:   .spam stop
 # ══════════════════════════════════════════════════════
+
+@dp.business_message(F.text.regexp(r"(?i)^\.spam\s+stop$"))
+async def on_spam_stop(msg: Message):
+    """Останавливает текущий спам."""
+    if not msg.business_connection_id:
+        return
+
+    try:
+        conn = await bot.get_business_connection(msg.business_connection_id)
+        owner_id = conn.user.id
+    except Exception as e:
+        log.error(f"get_business_connection (.spam stop): {e}")
+        return
+
+    if not msg.from_user or msg.from_user.id != owner_id:
+        return
+
+    await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
+
+    if owner_id in spam_stop:
+        spam_stop[owner_id].set()
+        log.info(f"🛑 .spam stop owner={owner_id}")
+
 
 @dp.business_message(F.text.regexp(r"(?i)^\.spam\s+.+\s+\d+$"))
 async def on_spam(msg: Message):
-    """Отправляет текст N раз в бизнес-чат."""
+    """Отправляет текст N раз в бизнес-чат. Можно остановить через .spam stop."""
     if not msg.business_connection_id:
         return
 
@@ -1113,9 +1022,6 @@ async def on_spam(msg: Message):
         return
 
     raw_text = msg.text or ""
-
-    # Парсим: .spam <текст> <число>
-    # Последнее слово — число, всё между .spam и числом — текст
     parts = raw_text.strip().split()
     try:
         count = int(parts[-1])
@@ -1123,54 +1029,30 @@ async def on_spam(msg: Message):
     except (ValueError, IndexError):
         return
 
-    # Ограничения безопасности
-    count = min(count, 100)   # максимум 100 сообщений
+    count = min(count, 100)
     if not spam_text:
         return
 
-    # Удаляем само сообщение с командой
     await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
 
-    # Отправляем сообщения с небольшой задержкой
     chat_id = msg.chat.id
     conn_id = msg.business_connection_id
 
+    # Создаём Event для остановки
+    stop_event = asyncio.Event()
+    spam_stop[owner_id] = stop_event
+
     for i in range(count):
+        if stop_event.is_set():
+            log.info(f"🛑 spam stopped at {i}/{count} owner={owner_id}")
+            break
         await _business_send_message(conn_id, chat_id, spam_text)
-        if count > 5:
-            await asyncio.sleep(0.3)  # небольшая задержка чтобы не попасть в лимиты Telegram
+        await asyncio.sleep(0.3)
 
-    log.info(f"📨 .spam owner={owner_id} chat={chat_id} text='{spam_text[:30]}' count={count}")
+    spam_stop.pop(owner_id, None)
+    log.info(f"📨 .spam done owner={owner_id} chat={chat_id} text='{spam_text[:30]}' count={count}")
 
 
-# ══════════════════════════════════════════════════════
-#  МУТ — АВТОУДАЛЕНИЕ (регистрируется ПЕРВЫМ)
-# ══════════════════════════════════════════════════════
-@dp.business_message()
-async def on_mute_autodelete(msg: Message):
-    """Первый хендлер — удаляет сообщения замученного собеседника."""
-    if not msg.business_connection_id:
-        return
-
-    # Команды владельца пропускаем
-    if msg.text:
-        txt_low = msg.text.strip().lower()
-        if txt_low in (".mute", ".unmute") or txt_low.startswith(".spam ")                 or txt_low.startswith(".ai ") or txt_low.startswith(".search "):
-            return
-
-    try:
-        conn = await bot.get_business_connection(msg.business_connection_id)
-        owner_id = conn.user.id
-    except Exception as e:
-        log.error(f"get_business_connection (mute_autodelete): {e}")
-        return
-
-    sender_id = msg.from_user.id if msg.from_user else None
-    if sender_id and sender_id != owner_id:
-        if owner_id in muted_chats and msg.chat.id in muted_chats[owner_id]:
-            await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
-            log.info(f"🔇 auto-deleted muted msg={msg.message_id} chat={msg.chat.id} owner={owner_id}")
-            return  # сообщение удалено — кэшировать не нужно
 
 
 # ══════════════════════════════════════════════════════
@@ -1190,11 +1072,9 @@ async def on_business_msg(msg: Message):
     if msg.text and (msg.text.lower().startswith(".ai ") or msg.text.lower().startswith(".search ")):
         return
 
-    # Не кэшируем .mute / .unmute / .spam команды владельца
-    if msg.text:
-        txt_low = msg.text.strip().lower()
-        if txt_low in (".mute", ".unmute") or txt_low.startswith(".spam "):
-            return
+    # Не кэшируем .spam команды владельца
+    if msg.text and msg.text.strip().lower().startswith(".spam"):
+        return
 
     try:
         conn = await bot.get_business_connection(msg.business_connection_id)
