@@ -982,33 +982,9 @@ async def on_search_group(msg: Message):
 #  Стоп:   .spam stop
 # ══════════════════════════════════════════════════════
 
-@dp.business_message(F.text.regexp(r"(?i)^\.spam\s+stop$"))
-async def on_spam_stop(msg: Message):
-    """Останавливает текущий спам."""
-    if not msg.business_connection_id:
-        return
-
-    try:
-        conn = await bot.get_business_connection(msg.business_connection_id)
-        owner_id = conn.user.id
-    except Exception as e:
-        log.error(f"get_business_connection (.spam stop): {e}")
-        return
-
-    if not msg.from_user or msg.from_user.id != owner_id:
-        return
-
-    await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
-
-    if owner_id in spam_stop:
-        spam_stop[owner_id].set()
-        log.info(f"🛑 .spam stop owner={owner_id}")
-
-
-@dp.business_message(F.text.regexp(r"(?i)^\.spam\s+.+\s+\d+$"))
-async def on_spam(msg: Message):
-    """Отправляет текст N раз в бизнес-чат. Можно остановить через .spam stop."""
-    if not msg.business_connection_id:
+async def _handle_spam(msg: Message):
+    """Обработка .spam и .spam stop — вызывается из on_business_msg."""
+    if not msg.business_connection_id or not msg.text:
         return
 
     try:
@@ -1021,24 +997,36 @@ async def on_spam(msg: Message):
     if not msg.from_user or msg.from_user.id != owner_id:
         return
 
-    raw_text = msg.text or ""
-    parts = raw_text.strip().split()
+    raw = msg.text.strip()
+    parts = raw.split()
+
+    # .spam stop
+    if len(parts) == 2 and parts[1].lower() == "stop":
+        await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
+        if owner_id in spam_stop:
+            spam_stop[owner_id].set()
+            log.info(f"🛑 .spam stop owner={owner_id}")
+        return
+
+    # .spam <текст> <число>
+    if len(parts) < 3:
+        return
     try:
         count = int(parts[-1])
-        spam_text = " ".join(parts[1:-1])
-    except (ValueError, IndexError):
+    except ValueError:
+        return
+
+    spam_text = " ".join(parts[1:-1])
+    if not spam_text:
         return
 
     count = min(count, 100)
-    if not spam_text:
-        return
 
     await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
 
     chat_id = msg.chat.id
     conn_id = msg.business_connection_id
 
-    # Создаём Event для остановки
     stop_event = asyncio.Event()
     spam_stop[owner_id] = stop_event
 
@@ -1072,8 +1060,9 @@ async def on_business_msg(msg: Message):
     if msg.text and (msg.text.lower().startswith(".ai ") or msg.text.lower().startswith(".search ")):
         return
 
-    # Не кэшируем .spam команды владельца
+    # Обрабатываем .spam команды и выходим
     if msg.text and msg.text.strip().lower().startswith(".spam"):
+        await _handle_spam(msg)
         return
 
     try:
