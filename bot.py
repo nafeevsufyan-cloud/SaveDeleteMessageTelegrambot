@@ -1045,17 +1045,12 @@ async def on_mute(msg: Message):
         muted_chats[owner_id] = set()
     muted_chats[owner_id].add(chat_id)
 
-    # Отправляем уведомление владельцу в личку
-    try:
-        await bot.send_message(
-            owner_id,
-            f"🔇 <b>Собеседник замучен</b>\n"
-            f"{LINE}\n"
-            f"Все сообщения из этого чата будут автоматически удаляться.\n"
-            f"Напишите <code>.unmute</code> для размута.",
-        )
-    except Exception:
-        pass
+    # Отправляем уведомление прямо в чат с собеседником
+    await _business_send_message(
+        msg.business_connection_id,
+        chat_id,
+        "🔇 Собеседник замучен. Напишите .unmute для размута.",
+    )
 
     log.info(f"🔇 .mute owner={owner_id} chat={chat_id}")
 
@@ -1085,16 +1080,12 @@ async def on_unmute(msg: Message):
     if owner_id in muted_chats:
         muted_chats[owner_id].discard(chat_id)
 
-    # Уведомляем владельца
-    try:
-        await bot.send_message(
-            owner_id,
-            f"🔔 <b>Собеседник размучен</b>\n"
-            f"{LINE}\n"
-            f"Сообщения из этого чата больше не удаляются.",
-        )
-    except Exception:
-        pass
+    # Отправляем уведомление прямо в чат с собеседником
+    await _business_send_message(
+        msg.business_connection_id,
+        chat_id,
+        "🔔 Собеседник размучен. Сообщения снова доходят.",
+    )
 
     log.info(f"🔔 .unmute owner={owner_id} chat={chat_id}")
 
