@@ -229,9 +229,9 @@ def kb_main(uid: int, is_prem: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_back(target: str = "menu") -> InlineKeyboardMarkup:
+def kb_back(target: str = "menu", label: str = "← В меню") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← В меню", callback_data=f"back_{target}")]
+        [InlineKeyboardButton(text=label, callback_data=f"back_{target}")]
     ])
 
 
@@ -1292,6 +1292,9 @@ async def cb_ai_exit(call: CallbackQuery, state: FSMContext):
     )
 
 
+
+
+
 # ══════════════════════════════════════════════════════
 #  ПОИСК ПО КЭШУ (только premium)
 # ══════════════════════════════════════════════════════
@@ -1326,10 +1329,9 @@ async def search_msg(msg: Message, state: FSMContext):
     for m in results[:15]:
         preview = (m["text"][:40] + "…") if len(m["text"] or "") > 40 else (m["text"] or m["media_type"])
         lines.append(f"◆ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
-    is_prem = await db.is_premium(uid)
     await msg.answer(
         f"◐ <b>Найдено: {len(results)}</b>\n{LINE}\n" + "\n\n".join(lines),
-        reply_markup=kb_main(uid, is_prem),
+        reply_markup=kb_back("menu"),
     )
 
 
@@ -1492,7 +1494,7 @@ async def cb_stats(call: CallbackQuery):
         f"◈ VIP до:        <b>{prem_txt}</b>\n"
         f"{LINE}\n"
         f"Лимит архива: {'200 (VIP)' if is_prem else '20 (базовый)'}",
-        reply_markup=kb_main(uid, is_prem),
+        reply_markup=kb_back("menu"),
     )
 
 
@@ -1515,9 +1517,15 @@ async def cb_show_all(call: CallbackQuery):
         preview = (m["text"][:40] + "…") if len(m["text"] or "") > 40 else (m["text"] or m["media_type"])
         lines.append(f"◆ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
     await call.answer()
+    # Архив: только контекстные кнопки + назад
+    archive_rows = []
+    if is_prem:
+        archive_rows.append([InlineKeyboardButton(text="◐ Поиск по архиву", callback_data="search")])
+    archive_rows.append([InlineKeyboardButton(text="✕ Очистить архив", callback_data="clear_cache")])
+    archive_rows.append([InlineKeyboardButton(text="← В меню", callback_data="back_menu")])
     await call.message.edit_text(
         f"▣ <b>Последние {len(messages)} записей</b>\n{LINE}\n" + "\n\n".join(lines),
-        reply_markup=kb_main(uid, is_prem),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=archive_rows),
     )
 
 
@@ -1637,8 +1645,7 @@ async def on_payment(msg: Message):
                 "Эти средства идут на серверы и развитие."
             )
 
-    is_prem = await db.is_premium(uid)
-    await msg.answer(text, reply_markup=kb_main(uid, is_prem))
+    await msg.answer(text, reply_markup=kb_back("menu"))
 
     try:
         await bot.send_message(
@@ -1743,7 +1750,9 @@ async def cb_adm_stats(call: CallbackQuery):
         f"◇ Записей в БД:   <b>{msgs}</b>\n"
         f"⭐ Всего звёзд:    <b>{stars}</b>\n"
         f"✦ Предложений:    <b>{ideas}</b>",
-        reply_markup=kb_admin(),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="← Назад", callback_data="adm")],
+        ]),
     )
 
 
@@ -1908,7 +1917,7 @@ async def on_idea_input(msg: Message, state: FSMContext):
         "Твоё предложение отправлено разработчику.\n"
         "Лучшие идеи попадают в следующие обновления.\n\n"
         "Ты помогаешь сделать Quiet Mod лучше.",
-        reply_markup=kb_main(uid, is_prem),
+        reply_markup=kb_back("menu"),
     )
 
     # Уведомляем админа
