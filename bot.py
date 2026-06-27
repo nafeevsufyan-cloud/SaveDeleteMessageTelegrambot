@@ -76,9 +76,6 @@ last_notify_msg: dict[int, int] = {}
 # uid → message_id главного сообщения
 home_msg: dict[int, int] = {}
 
-# Активные спам-задачи: owner_id → asyncio.Event (установить = стоп)
-spam_stop: dict[int, "asyncio.Event"] = {}
-
 
 # ══════════════════════════════════════════════════════
 #  FSM
@@ -93,7 +90,7 @@ class S(StatesGroup):
 # ══════════════════════════════════════════════════════
 #  HELPERS
 # ══════════════════════════════════════════════════════
-LINE = "▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎"
+LINE = "──────────────────"
 
 # Telegram отдаёт время сообщений в UTC — переводим в МСК (UTC+3, без перевода стрелок)
 MSK = timezone(timedelta(hours=3))
@@ -109,14 +106,14 @@ def ref_link(uid: int) -> str:
 
 
 MEDIA_MAP = {
-    "photo":      "🖼 Фото",
-    "video":      "🎬 Видео",
-    "audio":      "🎵 Аудио",
-    "voice":      "🎤 Голосовое",
-    "document":   "📄 Документ",
-    "sticker":    "✨ Стикер",
-    "video_note": "⭕ Кружок",
-    "animation":  "🎞 GIF",
+    "photo":      "◆ Фото",
+    "video":      "◆ Видео",
+    "audio":      "◆ Аудио",
+    "voice":      "◆ Голосовое",
+    "document":   "◆ Документ",
+    "sticker":    "◆ Стикер",
+    "video_note": "◆ Кружок",
+    "animation":  "◆ GIF",
 }
 
 
@@ -131,6 +128,24 @@ def fmt_sender(from_name: str, username: str) -> str:
     if username:
         return f"{from_name} ({username})"
     return from_name
+
+
+def home_text(is_prem: bool) -> str:
+    """
+    Единая карточка главного экрана — используется в /start и во всех
+    callback'ах, возвращающих в главное меню (back_menu, ack_, del_).
+    Один источник правды для дизайна, чтобы все экраны были идентичны.
+    """
+    status = "VIP-статус" if is_prem else "Базовый доступ"
+    return (
+        f"◆ <b>QUIET MOD</b> 👁️\n"
+        f"<code>{LINE}</code>\n\n"
+        f"◇ Статус       <b>{status}</b>\n"
+        f"◇ Перехват     <b>безлимит</b>\n"
+        f"◇ Архив        <b>{'200' if is_prem else '20'} записей</b>\n"
+        f"◇ ИИ           <b>без лимитов</b>\n"
+        f"<code>{LINE}</code>"
+    )
 
 
 async def _show_home(uid: int, text: str, reply_markup, target_msg: "Message | None" = None):
@@ -186,21 +201,21 @@ async def _send_notify(owner_id: int, text: str, reply_markup=None) -> Optional[
 def kb_main(uid: int, is_prem: bool) -> InlineKeyboardMarkup:
     rows = []
     if uid == ADMIN_ID:
-        rows.append([InlineKeyboardButton(text="🕶 Admin Suite", callback_data="adm")])
+        rows.append([InlineKeyboardButton(text="▲ Admin Suite", callback_data="adm")])
     # Блок перехватов
     rows.append([
-        InlineKeyboardButton(text="🗃 Архив",     callback_data="show_all"),
+        InlineKeyboardButton(text="▣ Архив",     callback_data="show_all"),
         InlineKeyboardButton(text="◆ Профиль",   callback_data="stats"),
     ])
     # Поиск только для premium
     if is_prem:
-        rows.append([InlineKeyboardButton(text="🔎 Поиск по архиву", callback_data="search")])
+        rows.append([InlineKeyboardButton(text="◐ Поиск по архиву", callback_data="search")])
     # Блок ИИ
-    rows.append([InlineKeyboardButton(text="🖤 ИИ-консьерж — без лимитов", callback_data="ai_open")])
+    rows.append([InlineKeyboardButton(text="◆ ИИ-консьерж — без лимитов", callback_data="ai_open")])
     # Блок прочего
     rows.append([
-        InlineKeyboardButton(text="🤝 Приглашения", callback_data="referrals"),
-        InlineKeyboardButton(text="🧹 Очистить",    callback_data="clear_cache"),
+        InlineKeyboardButton(text="⟡ Приглашения", callback_data="referrals"),
+        InlineKeyboardButton(text="✕ Очистить",    callback_data="clear_cache"),
     ])
     rows.append([
         InlineKeyboardButton(text="✦ Предложить",   callback_data="suggest_idea"),
@@ -210,7 +225,7 @@ def kb_main(uid: int, is_prem: bool) -> InlineKeyboardMarkup:
     if is_prem:
         rows.append([InlineKeyboardButton(text="◈ VIP-статус активен — продлить", callback_data="premium_info")])
     else:
-        rows.append([InlineKeyboardButton(text="◈ VIP · 50⭐/мес — расширить архив", callback_data="premium_info")])
+        rows.append([InlineKeyboardButton(text="◈ VIP · 50★/мес — расширить архив", callback_data="premium_info")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -227,7 +242,7 @@ def kb_deleted(msg_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✕ Стереть",      callback_data=f"del_{msg_id}"),
         ],
         [InlineKeyboardButton(text="◆ Сохранить навсегда", callback_data=f"save_{msg_id}")],
-        [InlineKeyboardButton(text="🗃 Весь архив",        callback_data="show_all")],
+        [InlineKeyboardButton(text="▣ Весь архив",        callback_data="show_all")],
     ])
 
 
@@ -242,11 +257,11 @@ def kb_ai() -> InlineKeyboardMarkup:
 
 def kb_premium() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◈ VIP · 50⭐ — 1 месяц",        callback_data="pay_premium_50")],
-        [InlineKeyboardButton(text="▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎▪︎",  callback_data="noop")],
-        [InlineKeyboardButton(text="◇ Вклад · 100⭐  (+30 дн. VIP)", callback_data="pay_donate_100")],
-        [InlineKeyboardButton(text="◇ Вклад · 200⭐  (+30 дн. VIP)", callback_data="pay_donate_200")],
-        [InlineKeyboardButton(text="◇ Вклад · 500⭐  (+30 дн. VIP)", callback_data="pay_donate_500")],
+        [InlineKeyboardButton(text="◈ VIP · 50★ — 1 месяц",        callback_data="pay_premium_50")],
+        [InlineKeyboardButton(text="─────────────────",  callback_data="noop")],
+        [InlineKeyboardButton(text="◇ Вклад · 100★  (+30 дн. VIP)", callback_data="pay_donate_100")],
+        [InlineKeyboardButton(text="◇ Вклад · 200★  (+30 дн. VIP)", callback_data="pay_donate_200")],
+        [InlineKeyboardButton(text="◇ Вклад · 500★  (+30 дн. VIP)", callback_data="pay_donate_500")],
         [InlineKeyboardButton(text="← В меню",                       callback_data="back_menu")],
     ])
 
@@ -256,7 +271,7 @@ def kb_admin() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="◆ Пользователи",   callback_data="adm_users")],
         [InlineKeyboardButton(text="◆ Статистика",     callback_data="adm_stats")],
         [InlineKeyboardButton(text="✦ Предложения",    callback_data="adm_ideas")],
-        [InlineKeyboardButton(text="📣 Сообщение всем", callback_data="adm_broadcast")],
+        [InlineKeyboardButton(text="▤ Сообщение всем", callback_data="adm_broadcast")],
         [InlineKeyboardButton(text="← В меню",         callback_data="back_menu")],
     ])
 
@@ -291,15 +306,15 @@ async def _get_image_base64(bot: Bot, file_id: str) -> Optional[str]:
 #  ПАСХАЛКИ
 # ══════════════════════════════════════════════════════
 MEGERA_TEXT = (
-    "😱 <b>МЕГЕРА</b> — мифическое существо, обитающее в недрах школы Денисовка.\n\n"
+    "◆ <b>МЕГЕРА</b> — мифическое существо, обитающее в недрах школы Денисовка.\n\n"
     "По преданиям старожилов, это создание появилось ещё в эпоху динозавров "
     "и с тех пор терроризирует учеников своим взглядом, от которого стынет кровь. "
     "Говорят, что если произнести её имя трижды в темноте — она явится с "
     "классным журналом и поставит двойку прямо в душу.\n\n"
-    "🏫 <i>Ареал обитания:</i> школа, Денисовка\n"
-    "☠️ <i>Опасность:</i> максимальная\n"
-    "📖 <i>Питается:</i> нервами учеников и несданными домашними заданиями\n"
-    "🧿 <i>Защита:</i> выученный урок и дневник без помарок\n\n"
+    "◇ <i>Ареал обитания:</i> школа, Денисовка\n"
+    "◇ <i>Опасность:</i> максимальная\n"
+    "◇ <i>Питается:</i> нервами учеников и несданными домашними заданиями\n"
+    "◇ <i>Защита:</i> выученный урок и дневник без помарок\n\n"
     "Берегите себя. Она везде. 👁"
 )
 
@@ -612,7 +627,7 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
             city = _extract_city(user_msg)
             weather_text = await _get_weather(city) if city else None
             if weather_text:
-                reply = weather_text + "\n\n🔍 <i>точные данные о погоде</i>"
+                reply = weather_text + "\n\n◐ <i>точные данные о погоде</i>"
                 ai_history[uid].append({"role": "assistant", "content": reply})
                 return reply
             if city:
@@ -640,7 +655,7 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
             ]
             reply_with_search = await _groq_request(augmented_messages)
             if reply_with_search:
-                reply = reply_with_search + "\n\n🔍 <i>ответ дополнен поиском</i>"
+                reply = reply_with_search + "\n\n◐ <i>ответ дополнен поиском</i>"
                 log.info(f"🔍 Search augmented reply for uid={uid}")
 
     # Сохраняем в историю
@@ -675,32 +690,30 @@ async def cmd_start(msg: Message, state: FSMContext):
         try:
             await bot.send_message(
                 referrer_id,
-                f"🎁 <b>Новый реферал!</b>\n{LINE}\n"
-                f"<b>{name}</b> присоединился по твоей ссылке 🙌",
+                f"◆ <b>Новый реферал</b>\n{LINE}\n"
+                f"<b>{name}</b> присоединился по твоей ссылке.",
             )
         except Exception:
             pass
 
     is_prem = await db.is_premium(uid)
-    badge   = "◈" if is_prem else ""
-    status  = "VIP-статус" if is_prem else "Базовый доступ"
-    home_text = (
-        f"👁️ <b>QUIET MOD</b> {badge}\n"
+    home_text_full = (
+        f"◆ <b>QUIET MOD</b> 👁️\n"
         f"<code>{LINE}</code>\n\n"
         f"<b>{html_escape(name)}</b>, добро пожаловать в тишину.\n\n"
         "Я слежу за тем, что исчезает —\n"
         "<b>удалённые и изменённые</b> сообщения\n"
         "появятся здесь раньше, чем их забудут.\n\n"
         f"<code>{LINE}</code>\n"
-        f"◆ Статус:     <b>{status}</b>\n"
-        f"◆ Перехват:   <b>безлимит</b>\n"
-        f"◆ Архив:      <b>{'200' if is_prem else '20'} записей</b>\n"
-        f"◆ ИИ:         <b>без лимитов</b>\n"
+        f"◇ Статус       <b>{'VIP-статус' if is_prem else 'Базовый доступ'}</b>\n"
+        f"◇ Перехват     <b>безлимит</b>\n"
+        f"◇ Архив        <b>{'200' if is_prem else '20'} записей</b>\n"
+        f"◇ ИИ           <b>без лимитов</b>\n"
         f"<code>{LINE}</code>\n\n"
-        f"🔗 Пригласить:\n"
+        f"◇ Пригласить:\n"
         f"<code>{ref_link(uid)}</code>"
     )
-    await _show_home(uid, home_text, kb_main(uid, is_prem), msg)
+    await _show_home(uid, home_text_full, kb_main(uid, is_prem), msg)
 
 
 # ══════════════════════════════════════════════════════
@@ -711,7 +724,7 @@ async def cmd_admin(msg: Message):
     if msg.from_user.id != ADMIN_ID:
         return
     await msg.answer(
-        f"🕶 <b>Admin Suite</b>\n{LINE}",
+        f"▲ <b>Admin Suite</b>\n{LINE}",
         reply_markup=kb_admin(),
     )
 
@@ -837,11 +850,11 @@ async def on_ai_group(msg: Message):
     answer = await groq_chat(uid, question, image_base64=image_b64)
 
     try:
-        await thinking.edit_text(f"👁️ {html_escape(answer)}")
+        await thinking.edit_text(f"◆ {html_escape(answer)}")
     except Exception:
         try:
             await thinking.delete()
-            await msg.reply(f"👁️ {html_escape(answer)}")
+            await msg.reply(f"◆ {html_escape(answer)}")
         except Exception as e:
             log.error(f"ai_group reply: {e}")
 
@@ -875,13 +888,13 @@ async def on_search_inline(msg: Message):
         return
 
     # Анимация ожидания
-    ok = await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "🔍 ·")
+    ok = await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "◐ ·")
     if not ok:
         return
     await asyncio.sleep(1)
-    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "🔍 · ·")
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "◐ · ·")
     await asyncio.sleep(1)
-    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "🔍 · · ·")
+    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, "◐ · · ·")
     await asyncio.sleep(1)
 
     # Поиск + ответ ИИ
@@ -912,7 +925,7 @@ async def on_search_inline(msg: Message):
         if not answer:
             answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
 
-    result_text = f"🔍 {html_escape(answer)}\n\n— 👁️ @{BOT_USERNAME}"
+    result_text = f"◐ {html_escape(answer)}\n\n— 👁️ @{BOT_USERNAME}"
     await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, result_text)
     log.info(f"🔍 .search done owner={owner_id} query={query[:50]}")
 
@@ -933,7 +946,7 @@ async def on_search_group(msg: Message):
         return
 
     await db.upsert_user(uid, msg.from_user.username or "", msg.from_user.full_name or "")
-    thinking = await msg.reply("🔍 · · ·")
+    thinking = await msg.reply("◐ · · ·")
 
     if _is_weather_query(query):
         city = _extract_city(query)
@@ -963,82 +976,15 @@ async def on_search_group(msg: Message):
             answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
 
     try:
-        await thinking.edit_text(f"🔍 {html_escape(answer)}")
+        await thinking.edit_text(f"◐ {html_escape(answer)}")
     except Exception:
         try:
             await thinking.delete()
-            await msg.reply(f"🔍 {html_escape(answer)}")
+            await msg.reply(f"◐ {html_escape(answer)}")
         except Exception as e:
             log.error(f"search_group reply: {e}")
 
     log.info(f"🔍 .search group chat={msg.chat.id} user={uid} query={query[:50]}")
-
-
-
-
-# ══════════════════════════════════════════════════════
-#  .spam / .spam stop КОМАНДЫ В БИЗНЕС-ЧАТЕ
-#  Формат: .spam <текст> <число>
-#  Стоп:   .spam stop
-# ══════════════════════════════════════════════════════
-
-async def _handle_spam(msg: Message):
-    """Обработка .spam и .spam stop — вызывается из on_business_msg."""
-    if not msg.business_connection_id or not msg.text:
-        return
-
-    try:
-        conn = await bot.get_business_connection(msg.business_connection_id)
-        owner_id = conn.user.id
-    except Exception as e:
-        log.error(f"get_business_connection (.spam): {e}")
-        return
-
-    if not msg.from_user or msg.from_user.id != owner_id:
-        return
-
-    raw = msg.text.strip()
-    parts = raw.split()
-
-    # .spam stop
-    if len(parts) == 2 and parts[1].lower() == "stop":
-        await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
-        if owner_id in spam_stop:
-            spam_stop[owner_id].set()
-            log.info(f"🛑 .spam stop owner={owner_id}")
-        return
-
-    # .spam <текст> <число>
-    if len(parts) < 3:
-        return
-    try:
-        count = int(parts[-1])
-    except ValueError:
-        return
-
-    spam_text = " ".join(parts[1:-1])
-    if not spam_text:
-        return
-
-    count = min(count, 100)
-
-    await _business_delete_message(msg.business_connection_id, msg.chat.id, msg.message_id)
-
-    chat_id = msg.chat.id
-    conn_id = msg.business_connection_id
-
-    stop_event = asyncio.Event()
-    spam_stop[owner_id] = stop_event
-
-    for i in range(count):
-        if stop_event.is_set():
-            log.info(f"🛑 spam stopped at {i}/{count} owner={owner_id}")
-            break
-        await _business_send_message(conn_id, chat_id, spam_text)
-        await asyncio.sleep(0.3)
-
-    spam_stop.pop(owner_id, None)
-    log.info(f"📨 .spam done owner={owner_id} chat={chat_id} text='{spam_text[:30]}' count={count}")
 
 
 
@@ -1060,11 +1006,6 @@ async def on_business_msg(msg: Message):
     if msg.text and (msg.text.lower().startswith(".ai ") or msg.text.lower().startswith(".search ")):
         return
 
-    # Обрабатываем .spam команды и выходим
-    if msg.text and msg.text.strip().lower().startswith(".spam"):
-        await _handle_spam(msg)
-        return
-
     try:
         conn = await bot.get_business_connection(msg.business_connection_id)
         owner_id = conn.user.id
@@ -1072,7 +1013,7 @@ async def on_business_msg(msg: Message):
         log.error(f"get_business_connection (save): {e}")
         return
 
-    media_type = "💬 Текст"
+    media_type = "◆ Текст"
     file_id: Optional[str] = None
     for attr, label in MEDIA_MAP.items():
         obj = getattr(msg, attr, None)
@@ -1137,7 +1078,7 @@ async def on_edited_business_msg(msg: Message):
         notify = (
             f"✦ <b>Сообщение отредактировано</b>\n"
             f"{LINE}\n"
-            f"👤 <b>{html_escape(sender)}</b>\n"
+            f"◇ <b>{html_escape(sender)}</b>\n"
             f"◆ {html_escape(msg.chat.title or getattr(msg.chat, 'full_name', None) or 'Личные')}\n"
             f"◷ {fmt_msg_date(msg.date)}\n"
             f"{LINE}\n"
@@ -1150,7 +1091,7 @@ async def on_edited_business_msg(msg: Message):
         await _send_notify(owner_id, notify)
 
     # В любом случае обновляем кэш новым содержимым
-    media_type = "💬 Текст"
+    media_type = "◆ Текст"
     file_id: Optional[str] = None
     for attr, label in MEDIA_MAP.items():
         obj = getattr(msg, attr, None)
@@ -1257,7 +1198,7 @@ async def on_deleted(event: BusinessMessagesDeleted):
         text = (
             f"✕ <b>Удалённое сообщение</b>\n"
             f"{LINE}\n"
-            f"👤 <b>{sender}</b>\n"
+            f"◇ <b>{sender}</b>\n"
             f"   удалил(а) сообщение\n"
             f"{LINE}\n"
             f"◆ Чат: {cached['chat']}\n"
@@ -1295,7 +1236,7 @@ async def cb_ai_open(call: CallbackQuery, state: FSMContext):
     await state.set_state(S.ai_chat)
     await call.answer()
     await call.message.edit_text(
-        f"🖤 <b>ИИ-консьерж</b>\n{LINE}\n"
+        f"◆ <b>ИИ-консьерж</b>\n{LINE}\n"
         f"Модель: <b>Llama 4 Scout · Vision</b>\n"
         f"Лимит: <b>без ограничений</b>\n\n"
         "Спрашивай что угодно — отвечу тихо и быстро ◆",
@@ -1330,7 +1271,7 @@ async def ai_msg(msg: Message, state: FSMContext):
 
     reply = await groq_chat(uid, text_content, image_base64=image_b64)
     await thinking.delete()
-    await msg.answer(f"👁️ {html_escape(reply)}", reply_markup=kb_ai())
+    await msg.answer(f"◆ {html_escape(reply)}", reply_markup=kb_ai())
 
 
 @dp.callback_query(F.data == "ai_clear")
@@ -1346,7 +1287,7 @@ async def cb_ai_exit(call: CallbackQuery, state: FSMContext):
     is_prem = await db.is_premium(uid)
     await call.answer()
     await call.message.edit_text(
-        f"👁️ <b>QUIET MOD</b>\n{LINE}\nГлавное меню",
+        home_text(is_prem),
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1362,7 +1303,7 @@ async def cb_search(call: CallbackQuery, state: FSMContext):
     await state.set_state(S.ai_search)
     await call.answer()
     await call.message.edit_text(
-        f"🔎 <b>Поиск по архиву</b>\n{LINE}\n"
+        f"◐ <b>Поиск по архиву</b>\n{LINE}\n"
         "Введи имя, @username или ключевое слово:",
         reply_markup=kb_back("menu"),
     )
@@ -1377,7 +1318,7 @@ async def search_msg(msg: Message, state: FSMContext):
     results = await db.search_messages(uid, msg.text.strip())
     if not results:
         await msg.answer(
-            f"🔎 <b>Ничего не найдено</b> по «{msg.text}»",
+            f"◐ <b>Ничего не найдено</b> по «{msg.text}»",
             reply_markup=kb_back("menu"),
         )
         return
@@ -1387,7 +1328,7 @@ async def search_msg(msg: Message, state: FSMContext):
         lines.append(f"◆ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
     is_prem = await db.is_premium(uid)
     await msg.answer(
-        f"🔎 <b>Найдено: {len(results)}</b>\n{LINE}\n" + "\n\n".join(lines),
+        f"◐ <b>Найдено: {len(results)}</b>\n{LINE}\n" + "\n\n".join(lines),
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1402,14 +1343,14 @@ async def cb_save_forever(call: CallbackQuery):
     uid = call.from_user.id
     cached = await db.get_message(uid, msg_id)
     if not cached:
-        await call.answer("❌ Сообщение не найдено в кэше", show_alert=True)
+        await call.answer("✕ Сообщение не найдено в кэше", show_alert=True)
         return
 
     sender = fmt_sender(cached["from_name"], cached["username"])
     save_text = (
         f"◆ <b>Сохранено из перехвата</b>\n"
         f"{LINE}\n"
-        f"👤 От: <b>{sender}</b>\n"
+        f"◇ От: <b>{sender}</b>\n"
         f"◆ Чат: {cached['chat']}\n"
         f"◷ Время: {cached['date']}\n"
         f"◇ Тип: {cached['media_type']}"
@@ -1430,7 +1371,7 @@ async def cb_save_forever(call: CallbackQuery):
                 InlineKeyboardButton(text="✕ Стереть",      callback_data=f"del_{msg_id}"),
             ],
             [InlineKeyboardButton(text="◆ Сохранено",        callback_data="noop")],
-            [InlineKeyboardButton(text="🗃 Весь архив",       callback_data="show_all")],
+            [InlineKeyboardButton(text="▣ Весь архив",       callback_data="show_all")],
         ])
         await call.message.edit_reply_markup(reply_markup=new_kb)
     except Exception as e:
@@ -1446,16 +1387,9 @@ async def cb_back(call: CallbackQuery, state: FSMContext):
     await state.clear()
     uid     = call.from_user.id
     is_prem = await db.is_premium(uid)
-    status  = "VIP-статус" if is_prem else "Базовый доступ"
     await call.answer()
     await call.message.edit_text(
-        f"👁️ <b>QUIET MOD</b>\n"
-        f"<code>{LINE}</code>\n\n"
-        f"◆ Статус:    <b>{status}</b>\n"
-        f"◆ Перехват:  <b>безлимит</b>\n"
-        f"◆ Архив:     <b>{'200' if is_prem else '20'} записей</b>\n"
-        f"◆ ИИ:        <b>без лимитов</b>\n"
-        f"<code>{LINE}</code>",
+        home_text(is_prem),
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1469,8 +1403,8 @@ async def cb_noop(call: CallbackQuery):
 async def cb_howto(call: CallbackQuery):
     await call.answer()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Личный профиль (Business)", callback_data="howto_profile")],
-        [InlineKeyboardButton(text="📡 Группа / Канал",            callback_data="howto_group")],
+        [InlineKeyboardButton(text="◆ Личный профиль (Business)", callback_data="howto_profile")],
+        [InlineKeyboardButton(text="▢ Группа / Канал",            callback_data="howto_group")],
         [InlineKeyboardButton(text="← В меню",                     callback_data="back_menu")],
     ])
     await call.message.edit_text(
@@ -1484,7 +1418,7 @@ async def cb_howto(call: CallbackQuery):
 async def cb_howto_profile(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text(
-        f"👤 <b>Подключение к профилю (Business)</b>\n{LINE}\n"
+        f"◆ <b>Подключение к профилю (Business)</b>\n{LINE}\n"
         "Для этого нужен <b>Telegram Business</b> (платная подписка).\n\n"
         "1️⃣ Открой <b>Настройки Telegram</b>\n"
         "2️⃣ Перейди в <b>Telegram Business</b>\n"
@@ -1506,7 +1440,7 @@ async def cb_howto_profile(call: CallbackQuery):
 async def cb_howto_group(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text(
-        f"📡 <b>Подключение к группе / каналу</b>\n{LINE}\n"
+        f"▢ <b>Подключение к группе / каналу</b>\n{LINE}\n"
         "Бот работает бесплатно — Telegram Business не нужен!\n\n"
         f"1️⃣ Добавь <code>@{BOT_USERNAME}</code> в группу или канал\n"
         "2️⃣ Дай боту права <b>Администратора</b>\n"
@@ -1529,9 +1463,9 @@ async def cb_referrals(call: CallbackQuery):
     refs = await db.count_referrals(uid)
     await call.answer()
     await call.message.edit_text(
-        f"🤝 <b>Приглашения</b>\n{LINE}\n"
+        f"⟡ <b>Приглашения</b>\n{LINE}\n"
         f"Пригласи близких — помоги проекту расти.\n\n"
-        f"🔗 Твоя ссылка:\n<code>{ref_link(uid)}</code>\n\n"
+        f"◇ Твоя ссылка:\n<code>{ref_link(uid)}</code>\n\n"
         f"◆ Приглашено: <b>{refs}</b>\n\n"
         "Доступ остаётся бесплатным для всех —\n"
         "приглашения помогают развивать проект.",
@@ -1552,9 +1486,9 @@ async def cb_stats(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text(
         f"◆ <b>Твой профиль</b> {badge}\n{LINE}\n"
-        f"🗃 В архиве:     <b>{cached}</b>\n"
-        f"🤝 Приглашено:   <b>{refs}</b>\n"
-        f"🖤 ИИ:           <b>безлимит</b>\n"
+        f"◇ В архиве:     <b>{cached}</b>\n"
+        f"◇ Приглашено:   <b>{refs}</b>\n"
+        f"◇ ИИ:           <b>безлимит</b>\n"
         f"◈ VIP до:        <b>{prem_txt}</b>\n"
         f"{LINE}\n"
         f"Лимит архива: {'200 (VIP)' if is_prem else '20 (базовый)'}",
@@ -1573,7 +1507,7 @@ async def cb_show_all(call: CallbackQuery):
     uid      = call.from_user.id
     messages = await db.get_recent_messages(uid, 20)
     if not messages:
-        await call.answer("🗃 Архив пуст", show_alert=True)
+        await call.answer("▣ Архив пуст", show_alert=True)
         return
     is_prem = await db.is_premium(uid)
     lines = []
@@ -1582,7 +1516,7 @@ async def cb_show_all(call: CallbackQuery):
         lines.append(f"◆ <b>{m['from_name']}</b>  {m['date']}\n   {preview}")
     await call.answer()
     await call.message.edit_text(
-        f"🗃 <b>Последние {len(messages)} записей</b>\n{LINE}\n" + "\n\n".join(lines),
+        f"▣ <b>Последние {len(messages)} записей</b>\n{LINE}\n" + "\n\n".join(lines),
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1591,16 +1525,9 @@ async def cb_show_all(call: CallbackQuery):
 async def cb_ack(call: CallbackQuery):
     uid     = call.from_user.id
     is_prem = await db.is_premium(uid)
-    status  = "VIP-статус" if is_prem else "Базовый доступ"
     await call.answer("✔ Принято")
     await call.message.edit_text(
-        f"👁️ <b>QUIET MOD</b>\n"
-        f"<code>{LINE}</code>\n\n"
-        f"◆ Статус:    <b>{status}</b>\n"
-        f"◆ Перехват:  <b>безлимит</b>\n"
-        f"◆ Архив:     <b>{'200' if is_prem else '20'} записей</b>\n"
-        f"◆ ИИ:        <b>без лимитов</b>\n"
-        f"<code>{LINE}</code>",
+        home_text(is_prem),
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1610,17 +1537,10 @@ async def cb_del(call: CallbackQuery):
     msg_id  = int(call.data.split("_")[1])
     uid     = call.from_user.id
     is_prem = await db.is_premium(uid)
-    status  = "VIP-статус" if is_prem else "Базовый доступ"
     await db.delete_message(uid, msg_id)
     await call.answer("✕ Удалено из архива")
     await call.message.edit_text(
-        f"👁️ <b>QUIET MOD</b>\n"
-        f"<code>{LINE}</code>\n\n"
-        f"◆ Статус:    <b>{status}</b>\n"
-        f"◆ Перехват:  <b>безлимит</b>\n"
-        f"◆ Архив:     <b>{'200' if is_prem else '20'} записей</b>\n"
-        f"◆ ИИ:        <b>без лимитов</b>\n"
-        f"<code>{LINE}</code>",
+        home_text(is_prem),
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1643,7 +1563,7 @@ async def cb_premium_info(call: CallbackQuery):
         "◇ <b>Вклад 100⭐+ (единоразово):</b>\n"
         "  • Метка в профиле\n"
         "  • +30 дней VIP в подарок\n"
-        "  • Моя искренняя благодарность 🖤",
+        "  • Моя искренняя благодарность",
         reply_markup=kb_premium(),
     )
 
@@ -1712,7 +1632,7 @@ async def on_payment(msg: Message):
             )
         else:
             text = (
-                f"🖤 <b>Огромное спасибо!</b>\n{LINE}\n"
+                f"◆ <b>Огромное спасибо!</b>\n{LINE}\n"
                 f"Ты поддержал проект на <b>{stars}⭐</b>\n"
                 "Эти средства идут на серверы и развитие."
             )
@@ -1723,8 +1643,8 @@ async def on_payment(msg: Message):
     try:
         await bot.send_message(
             ADMIN_ID,
-            f"💰 <b>Оплата</b> · {payload}\n"
-            f"👤 {msg.from_user.full_name} (ID: {uid})\n"
+            f"◈ <b>Оплата</b> · {payload}\n"
+            f"◇ {msg.from_user.full_name} (ID: {uid})\n"
             f"⭐ {stars} звёзд",
         )
     except Exception:
@@ -1746,7 +1666,7 @@ async def cb_adm(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.answer()
     await call.message.edit_text(
-        f"🕶 <b>Admin Suite</b>\n{LINE}",
+        f"▲ <b>Admin Suite</b>\n{LINE}",
         reply_markup=kb_admin(),
     )
 
@@ -1757,9 +1677,9 @@ USERS_PAGE_SIZE = 10
 def _fmt_user_line(u: dict) -> str:
     uname = f"@{u['username']}" if u.get("username") else (u.get("full_name") or "—")
     if u.get("referrer_id"):
-        source = f"🤝 по приглашению (от ID {u['referrer_id']})"
+        source = f"⟡ по приглашению (от ID {u['referrer_id']})"
     else:
-        source = "🔗 по юзернейму / прямой запуск"
+        source = "◇ по юзернейму / прямой запуск"
     return f"<b>{html_escape(uname)}</b>  (ID {u['id']})\n   {source}"
 
 
@@ -1819,8 +1739,8 @@ async def cb_adm_stats(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text(
         f"◆ <b>Общая статистика</b>\n{LINE}\n"
-        f"👥 Пользователей:  <b>{users}</b>\n"
-        f"🗃 Записей в БД:   <b>{msgs}</b>\n"
+        f"◇ Пользователей:  <b>{users}</b>\n"
+        f"◇ Записей в БД:   <b>{msgs}</b>\n"
         f"⭐ Всего звёзд:    <b>{stars}</b>\n"
         f"✦ Предложений:    <b>{ideas}</b>",
         reply_markup=kb_admin(),
@@ -1838,7 +1758,7 @@ async def cb_adm_ideas(call: CallbackQuery):
     if not ideas:
         await call.message.edit_text(
             f"✦ <b>Предложения от пользователей</b>\n{LINE}\n"
-            "Пока пусто — расскажи людям о кнопке 🖤",
+            "Пока пусто — расскажи людям о кнопке.",
             reply_markup=kb_admin(),
         )
         return
@@ -1858,7 +1778,7 @@ async def cb_adm_ideas(call: CallbackQuery):
             text=f"✕ Удалить #{idea['id']}",
             callback_data=f"adm_del_idea_{idea['id']}"
         )])
-    kb_rows.append([InlineKeyboardButton(text="🧹 Очистить все", callback_data="adm_clear_ideas")])
+    kb_rows.append([InlineKeyboardButton(text="✕ Очистить все", callback_data="adm_clear_ideas")])
     kb_rows.append([InlineKeyboardButton(text="← Назад", callback_data="adm")])
 
     await call.message.edit_text(
@@ -1882,7 +1802,7 @@ async def cb_adm_del_idea(call: CallbackQuery):
 async def cb_adm_clear_ideas(call: CallbackQuery):
     if not _is_admin(call): return
     await db.clear_ideas()
-    await call.answer("🧹 Все предложения очищены", show_alert=True)
+    await call.answer("✕ Все предложения очищены", show_alert=True)
     await call.message.edit_text(
         f"✦ <b>Предложения от пользователей</b>\n{LINE}\n"
         "Список очищен.",
@@ -1899,7 +1819,7 @@ async def cb_adm_broadcast(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.set_state(S.broadcast)
     await call.message.edit_text(
-        f"📣 <b>Сообщение всем пользователям</b>\n{LINE}\n\n"
+        f"▤ <b>Сообщение всем пользователям</b>\n{LINE}\n\n"
         "Отправь сообщение, которое получат <b>все</b>,\n"
         "кто хоть раз писал /start боту.\n\n"
         "Поддерживаются текст, фото, видео и другие медиа\n"
@@ -1920,7 +1840,7 @@ async def on_broadcast_input(msg: Message, state: FSMContext):
     await state.clear()
     ids = await db.all_user_ids()
 
-    status = await msg.answer(f"📣 Рассылка начата · 0 / {len(ids)}…")
+    status = await msg.answer(f"▤ Рассылка начата · 0 / {len(ids)}…")
 
     ok = 0
     fail = 0
@@ -1935,12 +1855,12 @@ async def on_broadcast_input(msg: Message, state: FSMContext):
 
         if i % 25 == 0 or i == len(ids):
             try:
-                await status.edit_text(f"📣 Рассылка идёт · {i} / {len(ids)}…")
+                await status.edit_text(f"▤ Рассылка идёт · {i} / {len(ids)}…")
             except Exception:
                 pass
 
     await status.edit_text(
-        f"📣 <b>Рассылка завершена</b>\n{LINE}\n"
+        f"▤ <b>Рассылка завершена</b>\n{LINE}\n"
         f"✔ Доставлено: <b>{ok}</b>\n"
         f"✕ Не доставлено: <b>{fail}</b>",
         reply_markup=kb_admin(),
@@ -1959,7 +1879,7 @@ async def cb_suggest_idea(call: CallbackQuery, state: FSMContext):
         "Расскажи, что бы ты хотел видеть в боте.\n"
         "Любая идея — полезная функция, улучшение\n"
         "интерфейса, новая команда — всё приветствуется.\n\n"
-        "✍️ Напиши своё предложение:",
+        "◇ Напиши своё предложение:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✕ Отмена", callback_data="back_menu")]
         ]),
@@ -1987,7 +1907,7 @@ async def on_idea_input(msg: Message, state: FSMContext):
         f"✦ <b>Спасибо за идею!</b>\n{LINE}\n\n"
         "Твоё предложение отправлено разработчику.\n"
         "Лучшие идеи попадают в следующие обновления.\n\n"
-        "Ты помогаешь сделать Quiet Mod лучше 🖤",
+        "Ты помогаешь сделать Quiet Mod лучше.",
         reply_markup=kb_main(uid, is_prem),
     )
 
@@ -1997,8 +1917,8 @@ async def on_idea_input(msg: Message, state: FSMContext):
         await bot.send_message(
             ADMIN_ID,
             f"✦ <b>Новая идея!</b>\n{LINE}\n"
-            f"👤 {uname} (ID: {uid})\n\n"
-            f"💬 {html_escape(text[:500])}",
+            f"◇ {uname} (ID: {uid})\n\n"
+            f"◇ {html_escape(text[:500])}",
         )
     except Exception:
         pass
@@ -2008,12 +1928,12 @@ async def on_idea_input(msg: Message, state: FSMContext):
 #  ЗАПУСК
 # ══════════════════════════════════════════════════════
 DEVLOG = (
-    "👁️ <b>QUIET MOD</b>  <code>Black Edition</code>\n"
+    "◆ <b>QUIET MOD</b> 👁️  <code>Black Edition</code>\n"
     f"{LINE}\n\n"
     "Привет! Это краткий обзор того, что умеет бот.\n"
-    "Если ты здесь впервые — добро пожаловать в тишину 🖤\n\n"
+    "Если ты здесь впервые — добро пожаловать в тишину.\n\n"
     f"{LINE}\n"
-    "🕶 <b>ПЕРЕХВАТ СООБЩЕНИЙ</b>\n\n"
+    "▲ <b>ПЕРЕХВАТ СООБЩЕНИЙ</b>\n\n"
     "✕ <b>Удалённые сообщения</b>\n"
     "   Кто-то удалил сообщение в переписке?\n"
     "   Бот мгновенно пришлёт тебе его содержимое:\n"
@@ -2025,28 +1945,28 @@ DEVLOG = (
     "   Свои удалённые и изменённые — тишина.\n"
     "   Только чужие. Никакого лишнего шума.\n\n"
     f"{LINE}\n"
-    "🖤 <b>ИИ-КОНСЬЕРЖ</b>  <i>(без лимитов)</i>\n\n"
-    "💬 <b>Чат с ИИ прямо в боте</b>\n"
+    "◆ <b>ИИ-КОНСЬЕРЖ</b>  <i>(без лимитов)</i>\n\n"
+    "◇ <b>Чат с ИИ прямо в боте</b>\n"
     "   Задай любой вопрос — ИИ ответит чётко и быстро.\n"
     "   История диалога сохраняется до сброса.\n\n"
-    "🖼 <b>Анализ изображений</b>\n"
+    "◇ <b>Анализ изображений</b>\n"
     "   Прикрепи фото — ИИ разберёт, прочитает текст,\n"
     "   решит задачу или объяснит что на картинке.\n\n"
-    "📡 <b>ИИ в группах и каналах</b>\n"
+    "◇ <b>ИИ в группах и каналах</b>\n"
     "   Добавь бота в любой чат, напиши:\n"
     "   <code>.ai вопрос</code> — бот ответит прямо в беседе.\n\n"
-    "⚡ <b>ИИ в бизнес-переписке</b>\n"
+    "◇ <b>ИИ в бизнес-переписке</b>\n"
     "   Напиши <code>.ai вопрос</code> прямо в чате с собеседником —\n"
     "   бот незаметно заменит твоё сообщение ответом.\n\n"
-    "🎙 <b>Расшифровка голосовых</b>\n"
+    "◇ <b>Расшифровка голосовых</b>\n"
     "   Удалённое голосовое автоматически расшифруется\n"
     "   в текст. Whisper AI — точность 95%+.\n\n"
     f"{LINE}\n"
-    "🗃 <b>АРХИВ СООБЩЕНИЙ</b>\n\n"
-    "📋 <b>Хранилище перехватов</b>\n"
+    "▣ <b>АРХИВ СООБЩЕНИЙ</b>\n\n"
+    "◇ <b>Хранилище перехватов</b>\n"
     "   Все перехваченные сообщения хранятся в архиве.\n"
     "   Базовый: 20 записей · VIP: 200 записей.\n\n"
-    "🔎 <b>Поиск по архиву</b>  <i>(VIP)</i>\n"
+    "◐ <b>Поиск по архиву</b>  <i>(VIP)</i>\n"
     "   Найди любое сообщение по тексту, имени\n"
     "   отправителя или юзернейму за секунды.\n\n"
     "◆ <b>Сохранить навсегда</b>\n"
@@ -2060,7 +1980,7 @@ DEVLOG = (
     "◇ <b>ВКЛАД</b>  <code>100+ звёзд</code>\n\n"
     "   • Метка ◇ навсегда\n"
     "   • +30 дней VIP в подарок\n"
-    "   • Поддержка независимого проекта 🖤\n\n"
+    "   • Поддержка независимого проекта\n\n"
     f"{LINE}\n"
     "⚙ <b>КАК ПОДКЛЮЧИТЬ?</b>\n\n"
     "   Нужен <b>Telegram Business</b> (или просто добавить\n"
@@ -2068,17 +1988,17 @@ DEVLOG = (
     "   В боте есть кнопка <b>«Подключение»</b> — там\n"
     "   пошаговая инструкция с картинками.\n\n"
     f"{LINE}\n"
-    "🚀 <b>ВПЕРЕДИ — ЕЩЁ БОЛЬШЕ</b>\n\n"
+    "▲ <b>ВПЕРЕДИ — ЕЩЁ БОЛЬШЕ</b>\n\n"
     "   Бот активно развивается. В планах:\n"
     "   — Уведомления о скриншотах\n"
     "   — Статистика активности чатов\n"
     "   — Экспорт архива в файл\n"
     "   — Ещё больше ИИ-возможностей\n\n"
-    "💬 Есть идея? Нажми кнопку <b>«✦ Предложить»</b> в боте.\n"
+    "◇ Есть идея? Нажми кнопку <b>«✦ Предложить»</b> в боте.\n"
     "   Лучшие идеи от вас — уже в следующем обновлении.\n\n"
     f"{LINE}\n"
-    "Спасибо что ты здесь. Это только начало 🖤\n"
-    "— Команда <b>Quiet Mod 👁️</b>"
+    "Спасибо что ты здесь. Это только начало.\n"
+    "— Команда <b>Quiet Mod</b> 👁️"
 )
 
 
@@ -2096,7 +2016,7 @@ async def _broadcast_devlog():
             fail += 1
     log.info(f"📢 DevLog разослан: ok={ok} fail={fail}")
     try:
-        await bot.send_message(ADMIN_ID, f"📢 DevLog разослан: ✅ {ok} · ❌ {fail}")
+        await bot.send_message(ADMIN_ID, f"▤ DevLog разослан: ✔ {ok} · ✕ {fail}")
     except Exception:
         pass
 
@@ -2108,12 +2028,16 @@ async def main():
         await bot.send_message(
             ADMIN_ID,
             f"✔ <b>Бот запущен</b> · Quiet Mod 👁️ · SQLite · Railway\n"
-            f"🤖 Модель: Llama 4 Scout (Vision)"
+            f"◇ Модель: Llama 4 Scout (Vision)"
         )
     except Exception:
         pass
     # DevLog рассылка отключена
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    try:
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    finally:
+        # Закрываем соединение с БД при остановке (Ctrl+C, рестарт деплоя и т.п.)
+        await db.close_db()
 
 
 if __name__ == "__main__":
