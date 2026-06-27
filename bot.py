@@ -204,8 +204,11 @@ def kb_main(uid: int, is_prem: bool) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="▲ Admin Suite", callback_data="adm")])
     # Блок перехватов
     rows.append([
-        InlineKeyboardButton(text="▣ Архив",     callback_data="show_all"),
-        InlineKeyboardButton(text="◆ Профиль",   callback_data="stats"),
+        InlineKeyboardButton(text="▣ Архив",        callback_data="show_all"),
+        InlineKeyboardButton(text="◆ Профиль",      callback_data="stats"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text="◈ Сохранённые ➩", callback_data="show_saved"),
     ])
     # Поиск только для premium
     if is_prem:
@@ -235,14 +238,13 @@ def kb_back(target: str = "menu", label: str = "← В меню") -> InlineKeybo
     ])
 
 
-def kb_deleted(msg_id: int) -> InlineKeyboardMarkup:
+def kb_notify(save_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура под уведомлением об удалённом/изменённом сообщении."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✔ Принято",      callback_data=f"ack_{msg_id}"),
-            InlineKeyboardButton(text="✕ Стереть",      callback_data=f"del_{msg_id}"),
+            InlineKeyboardButton(text="◆ Сохранить ➩", callback_data=f"nsave_{save_id}"),
+            InlineKeyboardButton(text="✕ Удалить",      callback_data=f"ndel_{save_id}"),
         ],
-        [InlineKeyboardButton(text="◆ Сохранить навсегда", callback_data=f"save_{msg_id}")],
-        [InlineKeyboardButton(text="▣ Весь архив",        callback_data="show_all")],
     ])
 
 
@@ -1075,11 +1077,12 @@ async def on_edited_business_msg(msg: Message):
             msg.from_user.full_name if msg.from_user else "Неизвестно",
             f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
         )
+        chat_name = msg.chat.title or getattr(msg.chat, "full_name", None) or "Личные"
         notify = (
             f"✦ <b>Сообщение отредактировано</b>\n"
             f"{LINE}\n"
             f"◇ <b>{html_escape(sender)}</b>\n"
-            f"◆ {html_escape(msg.chat.title or getattr(msg.chat, 'full_name', None) or 'Личные')}\n"
+            f"◆ {html_escape(chat_name)}\n"
             f"◷ {fmt_msg_date(msg.date)}\n"
             f"{LINE}\n"
         )
@@ -1088,7 +1091,20 @@ async def on_edited_business_msg(msg: Message):
         else:
             notify += "◇ <b>Было:</b> <i>нет в архиве</i>\n\n"
         notify += f"◆ <b>Стало:</b>\n{html_escape(new_text)}"
-        await _send_notify(owner_id, notify)
+
+        # Сохраняем в saved_messages для возможного сохранения пользователем
+        save_id = await db.save_intercepted(owner_id, {
+            "from_name":  msg.from_user.full_name if msg.from_user else "Неизвестно",
+            "username":   f"@{msg.from_user.username}" if msg.from_user and msg.from_user.username else "",
+            "chat":       chat_name,
+            "date":       fmt_msg_date(msg.date),
+            "text":       new_text,
+            "media_type": "◆ Текст",
+            "file_id":    None,
+            "event_type": "edited",
+            "old_text":   old_text,
+        })
+        await _send_notify(owner_id, notify, reply_markup=kb_notify(save_id))
 
     # В любом случае обновляем кэш новым содержимым
     media_type = "◆ Текст"
@@ -1206,10 +1222,22 @@ async def on_deleted(event: BusinessMessagesDeleted):
             f"◇ Тип: {cached['media_type']}"
         )
         if cached["text"]:
-            # Красиво оборачиваем текст
             text += f"\n{LINE}\n◆ <b>Содержимое:</b>\n{cached['text']}"
 
-        sent_id = await _send_notify(owner_id, text, reply_markup=kb_deleted(msg_id))
+        # Сохраняем в saved_messages для возможного сохранения пользователем
+        save_id = await db.save_intercepted(owner_id, {
+            "from_name":  cached["from_name"],
+            "username":   cached["username"],
+            "chat":       cached["chat"],
+            "date":       cached["date"],
+            "text":       cached["text"],
+            "media_type": cached["media_type"],
+            "file_id":    cached["file_id"],
+            "event_type": "deleted",
+            "old_text":   None,
+        })
+
+        sent_id = await _send_notify(owner_id, text, reply_markup=kb_notify(save_id))
         if sent_id is None:
             continue
 
@@ -1399,6 +1427,141 @@ async def cb_back(call: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "noop")
 async def cb_noop(call: CallbackQuery):
     await call.answer()
+
+
+# ══════════════════════════════════════════════════════
+#  КНОПКИ ПОД УВЕДОМЛЕНИЯМИ  (nsave_ / ndel_)
+# ══════════════════════════════════════════════════════
+@dp.callback_query(F.data.startswith("nsave_"))
+async def cb_notify_save(call: CallbackQuery):
+    """Нажал «Сохранить» под уведомлением — помечаем, удаляем уведомление, возвращаем меню."""
+    save_id = int(call.data.split("_")[1])
+    uid     = call.from_user.id
+    is_prem = await db.is_premium(uid)
+    await call.answer("◆ Сохранено на 7 дней", show_alert=False)
+    # Запись уже существует в saved_messages — просто удаляем уведомление
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    # Показываем главное меню заново
+    existing_id = home_msg.get(uid)
+    if existing_id:
+        try:
+            await bot.edit_message_text(
+                home_text(is_prem), chat_id=uid, message_id=existing_id,
+                reply_markup=kb_main(uid, is_prem), parse_mode="HTML"
+            )
+            return
+        except Exception:
+            pass
+    sent = await bot.send_message(uid, home_text(is_prem), reply_markup=kb_main(uid, is_prem))
+    home_msg[uid] = sent.message_id
+
+
+@dp.callback_query(F.data.startswith("ndel_"))
+async def cb_notify_del(call: CallbackQuery):
+    """Нажал «Удалить» под уведомлением — удаляем из saved_messages, убираем уведомление, меню."""
+    save_id = int(call.data.split("_")[1])
+    uid     = call.from_user.id
+    is_prem = await db.is_premium(uid)
+    await db.delete_saved_message(save_id)
+    await call.answer("✕ Удалено", show_alert=False)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    # Показываем главное меню заново
+    existing_id = home_msg.get(uid)
+    if existing_id:
+        try:
+            await bot.edit_message_text(
+                home_text(is_prem), chat_id=uid, message_id=existing_id,
+                reply_markup=kb_main(uid, is_prem), parse_mode="HTML"
+            )
+            return
+        except Exception:
+            pass
+    sent = await bot.send_message(uid, home_text(is_prem), reply_markup=kb_main(uid, is_prem))
+    home_msg[uid] = sent.message_id
+
+
+# ══════════════════════════════════════════════════════
+#  СОХРАНЁННЫЕ СООБЩЕНИЯ (7 дней)
+# ══════════════════════════════════════════════════════
+@dp.callback_query(F.data == "show_saved")
+async def cb_show_saved(call: CallbackQuery):
+    uid   = call.from_user.id
+    items = await db.get_saved_messages(uid)
+    await call.answer()
+
+    if not items:
+        await call.message.edit_text(
+            f"◈ <b>Сохранённые сообщения</b>\n{LINE}\n\n"
+            "Пусто.\n\n"
+            "Когда придёт уведомление об удалённом\n"
+            "или изменённом сообщении — нажми\n"
+            "<b>«◆ Сохранить ➩»</b> и оно появится здесь.\n\n"
+            "◇ Хранятся <b>7 дней</b>, затем удаляются автоматически.",
+            reply_markup=kb_back("menu"),
+        )
+        return
+
+    lines = []
+    for item in items[:20]:
+        icon = "✕" if item["event_type"] == "deleted" else "✦"
+        preview = (item["text"][:35] + "…") if len(item["text"] or "") > 35 else (item["text"] or item["media_type"] or "—")
+        # Считаем сколько дней осталось
+        from datetime import datetime as _dt
+        try:
+            days_left = (_dt.fromisoformat(item["expires_at"]) - _dt.now()).days + 1
+        except Exception:
+            days_left = 7
+        lines.append(
+            f"{icon} <b>{html_escape(item['from_name'] or '?')}</b>  {item['date']}\n"
+            f"   {html_escape(preview)}  <i>({days_left} д.)</i>"
+        )
+
+    # Кнопки: удалить конкретное или очистить все
+    rows = []
+    for item in items[:10]:
+        icon = "✕" if item["event_type"] == "deleted" else "✦"
+        name = (item["from_name"] or "?")[:12]
+        rows.append([InlineKeyboardButton(
+            text=f"✕ Удалить: {icon} {name}",
+            callback_data=f"delsaved_{item['id']}"
+        )])
+    rows.append([InlineKeyboardButton(text="✕ Очистить все", callback_data="clearsaved")])
+    rows.append([InlineKeyboardButton(text="← В меню",       callback_data="back_menu")])
+
+    await call.message.edit_text(
+        f"◈ <b>Сохранённые</b> ({len(items)})\n{LINE}\n\n"
+        + "\n\n".join(lines)
+        + f"\n\n{LINE}\n◇ Хранятся 7 дней от перехвата.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@dp.callback_query(F.data.startswith("delsaved_"))
+async def cb_del_saved(call: CallbackQuery):
+    save_id = int(call.data.split("_")[1])
+    await db.delete_saved_message(save_id)
+    await call.answer("✕ Удалено")
+    await cb_show_saved(call)
+
+
+@dp.callback_query(F.data == "clearsaved")
+async def cb_clear_saved(call: CallbackQuery):
+    uid   = call.from_user.id
+    items = await db.get_saved_messages(uid)
+    for item in items:
+        await db.delete_saved_message(item["id"])
+    await call.answer("✕ Все удалены", show_alert=True)
+    is_prem = await db.is_premium(uid)
+    await call.message.edit_text(
+        home_text(is_prem),
+        reply_markup=kb_main(uid, is_prem),
+    )
 
 
 @dp.callback_query(F.data == "howto")
@@ -2032,6 +2195,7 @@ async def _broadcast_devlog():
 
 async def main():
     await db.init_db()
+    await db.purge_expired_saved()
     log.info("🚀 Quiet Mod 👁️ запускается...")
     try:
         await bot.send_message(

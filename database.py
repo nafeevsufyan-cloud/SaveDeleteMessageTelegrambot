@@ -88,8 +88,25 @@ async def init_db():
         created_at  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS saved_messages (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id    INTEGER NOT NULL,
+        from_name   TEXT,
+        username    TEXT,
+        chat        TEXT,
+        date        TEXT,
+        text        TEXT,
+        media_type  TEXT,
+        file_id     TEXT,
+        event_type  TEXT NOT NULL,
+        old_text    TEXT,
+        saved_at    TEXT NOT NULL,
+        expires_at  TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_owner ON messages(owner_id);
     CREATE INDEX IF NOT EXISTS idx_messages_owner_msg ON messages(owner_id, msg_id);
+    CREATE INDEX IF NOT EXISTS idx_saved_owner ON saved_messages(owner_id);
     """)
     await _conn.commit()
 
@@ -348,3 +365,67 @@ async def count_ideas() -> int:
     db = _get_conn()
     async with db.execute("SELECT COUNT(*) FROM ideas") as cur:
         return (await cur.fetchone())[0]
+
+
+# ──────────────────────────────────────────────
+#  SAVED MESSAGES (7-дневное хранилище)
+# ──────────────────────────────────────────────
+async def save_intercepted(owner_id: int, data: dict) -> int:
+    """Сохраняет перехваченное сообщение в saved_messages на 7 дней.
+    Возвращает id записи."""
+    now = datetime.now()
+    expires = now + __import__('datetime').timedelta(days=7)
+    conn = _get_conn()
+    async with _write_lock:
+        cur = await conn.execute("""
+            INSERT INTO saved_messages
+              (owner_id, from_name, username, chat, date, text, media_type, file_id,
+               event_type, old_text, saved_at, expires_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            owner_id, data.get("from_name"), data.get("username"),
+            data.get("chat"), data.get("date"), data.get("text"),
+            data.get("media_type"), data.get("file_id"),
+            data.get("event_type", "deleted"), data.get("old_text"),
+            now.isoformat(), expires.isoformat()
+        ))
+        await conn.commit()
+        return cur.lastrowid
+
+
+async def get_saved_messages(owner_id: int) -> list[dict]:
+    """Возвращает сохранённые сообщения (ещё не истёкшие)."""
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    async with conn.execute("""
+        SELECT * FROM saved_messages
+        WHERE owner_id=? AND expires_at > ?
+        ORDER BY id DESC
+    """, (owner_id, now)) as cur:
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def delete_saved_message(save_id: int):
+    conn = _get_conn()
+    async with _write_lock:
+        await conn.execute("DELETE FROM saved_messages WHERE id=?", (save_id,))
+        await conn.commit()
+
+
+async def count_saved_messages(owner_id: int) -> int:
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    async with conn.execute(
+        "SELECT COUNT(*) FROM saved_messages WHERE owner_id=? AND expires_at > ?",
+        (owner_id, now)
+    ) as cur:
+        return (await cur.fetchone())[0]
+
+
+async def purge_expired_saved():
+    """Удаляет все истёкшие saved_messages — вызывать при старте или по расписанию."""
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    async with _write_lock:
+        await conn.execute("DELETE FROM saved_messages WHERE expires_at <= ?", (now,))
+        await conn.commit()
