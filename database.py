@@ -215,16 +215,32 @@ PREMIUM_CACHE_LIMIT = 200
 
 
 async def save_message(owner_id: int, msg: dict):
-    """Сохраняем сообщение, при переполнении — удаляем самое старое."""
+    """
+    Сохраняем/обновляем сообщение в кэше, при переполнении — удаляем самое старое.
+
+    ВАЖНО: раньше здесь стоял INSERT OR IGNORE — из-за UNIQUE(owner_id, msg_id)
+    повторный save_message() для уже закэшированного msg_id (например, при
+    редактировании сообщения) молча игнорировался и текст в кэше не обновлялся.
+    Из-за этого при втором и последующих редактированиях уведомление показывало
+    протухшее "было" вместо реального предыдущего текста. UPSERT это чинит.
+    """
     limit = PREMIUM_CACHE_LIMIT if await is_premium(owner_id) else FREE_CACHE_LIMIT
     now   = datetime.now().isoformat()
     db = _get_conn()
     async with _write_lock:
-        # Вставка / игнор дублей
         await db.execute("""
-            INSERT OR IGNORE INTO messages
+            INSERT INTO messages
               (owner_id, msg_id, sender_id, from_name, username, chat, date, text, media_type, file_id, created_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(owner_id, msg_id) DO UPDATE SET
+                sender_id  = excluded.sender_id,
+                from_name  = excluded.from_name,
+                username   = excluded.username,
+                chat       = excluded.chat,
+                date       = excluded.date,
+                text       = excluded.text,
+                media_type = excluded.media_type,
+                file_id    = excluded.file_id
         """, (
             owner_id, msg["msg_id"], msg.get("sender_id"), msg["from_name"], msg["username"],
             msg["chat"], msg["date"], msg["text"],

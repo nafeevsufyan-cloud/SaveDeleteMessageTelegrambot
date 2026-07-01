@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import re
+import signal
 from datetime import date, timedelta, timezone
 from typing import Optional
 
@@ -555,7 +556,7 @@ def _needs_search(reply: str, user_msg: str) -> bool:
     # Ключевые слова в вопросе пользователя — явно требуют свежих данных
     search_triggers = [
         "курс", "цена", "стоимость", "погода", "новости", "сегодня",
-        "сейчас", "последние", "актуальн", "2024", "2025", "2026",
+        "сейчас", "последние", "актуальн",
         "вышел", "выйдет", "релиз", "обновление", "версия",
         "кто выиграл", "результат", "счёт", "матч",
     ]
@@ -563,6 +564,13 @@ def _needs_search(reply: str, user_msg: str) -> bool:
     if any(p in reply_lower for p in uncertainty_phrases):
         return True
     if any(t in user_msg.lower() for t in search_triggers):
+        return True
+    # Любой год из недавнего диапазона (вместо жёстко зашитых 2024/2025/2026,
+    # которые устарели бы сами по себе в 2027) — сигнал, что нужны свежие данные.
+    current_year = date.today().year
+    if re.search(r"\b(20[2-9]\d)\b", user_msg) and any(
+        str(y) in user_msg for y in range(current_year - 2, current_year + 2)
+    ):
         return True
     return False
 
@@ -825,8 +833,6 @@ async def cmd_admin(msg: Message):
 #  Пишешь: .ai вопрос
 #  Бот редактирует твоё сообщение: ⏳ → ответ + @бот
 # ══════════════════════════════════════════════════════
-
-AI_PREFIX = ".ai"  # команда (без пробела — регистр игнорируется)
 
 async def _business_edit_message_ex(conn_id: str, chat_id: int, msg_id: int, text: str) -> tuple[bool, Optional[str]]:
     """
@@ -1293,15 +1299,10 @@ async def on_deleted(event: BusinessMessagesDeleted):
     for msg_id in event.message_ids:
         cached = await db.get_message(owner_id, msg_id)
         if not cached:
-            log.warning(f"❓ msg={msg_id} not in cache for owner={owner_id}")
-            # Отправляем даже если не в кэше — хотя бы факт удаления
-            await _send_notify(
-                owner_id,
-                f"✕ <b>Сообщение исчезло</b>\n"
-                f"{LINE}\n"
-                f"◆ Сообщение <b>#{msg_id}</b> было удалено,\n"
-                "но не было в архиве — возможно, бот только подключился.",
-            )
+            # Сообщения нет в кэше (например бот только подключился, или это
+            # служебное/непойманное апдейтом сообщение) — молча пропускаем,
+            # чтобы не засорять чат бесполезными уведомлениями без содержимого.
+            log.info(f"❓ msg={msg_id} not in cache for owner={owner_id} — skip, nothing to show")
             continue
 
         # Не уведомляем о своих собственных удалённых сообщениях
@@ -2324,6 +2325,26 @@ async def _broadcast_devlog():
         pass
 
 
+PURGE_INTERVAL_SECONDS = 6 * 60 * 60  # раз в 6 часов
+
+
+async def _purge_loop():
+    """
+    Фоновая задача: раз в PURGE_INTERVAL_SECONDS чистит истёкшие saved_messages.
+    Раньше purge_expired_saved() вызывался только один раз при старте — на
+    процессе, который живёт неделями без рестартов, таблица только росла.
+    """
+    while True:
+        try:
+            await asyncio.sleep(PURGE_INTERVAL_SECONDS)
+            await db.purge_expired_saved()
+            log.info("🧹 Просроченные saved_messages очищены")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.error(f"purge_loop: {e}")
+
+
 async def main():
     await db.init_db()
     await db.purge_expired_saved()
@@ -2336,10 +2357,44 @@ async def main():
         )
     except Exception:
         pass
-    # DevLog рассылка отключена
+
+    purge_task = asyncio.create_task(_purge_loop())
+
+    # Корректное завершение по SIGTERM (Railway шлёт его при рестарте/деплое) —
+    # без этого dp.start_polling может быть убит жёстко, не дав закрыть
+    # соединение с БД (риск повреждения WAL-файла SQLite).
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    def _request_stop(*_):
+        log.info("🛑 Получен сигнал остановки — завершаю polling...")
+        stop_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except (NotImplementedError, RuntimeError):
+            pass  # некоторые платформы (Windows) не поддерживают signal handlers в event loop
+
+    polling_task = asyncio.create_task(
+        dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    )
+    stop_wait_task = asyncio.create_task(stop_event.wait())
+
     try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        await asyncio.wait(
+            {polling_task, stop_wait_task}, return_when=asyncio.FIRST_COMPLETED
+        )
     finally:
+        purge_task.cancel()
+        if not polling_task.done():
+            await dp.stop_polling()
+            polling_task.cancel()
+        for t in (purge_task, polling_task):
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
         # Закрываем соединение с БД при остановке (Ctrl+C, рестарт деплоя и т.п.)
         await db.close_db()
 
