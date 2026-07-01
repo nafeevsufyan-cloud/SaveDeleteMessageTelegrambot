@@ -41,9 +41,7 @@ BOT_TOKEN    = os.environ["BOT_TOKEN"]
 ADMIN_ID     = int(os.environ["ADMIN_ID"])
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BOT_USERNAME = "Quiet_Mod_bot"  # фиксированное имя — не зависит от старой переменной окружения
-GROQ_MODEL   = "qwen/qwen3.6-27b"  # мультимодальная (видит фото), с thinking-режимом, флагманский код/reasoning
-# Llama 4 Scout был официально задепрекейчен Groq 17.06.2026 — эта модель его замена
-# (единственная актуальная на Groq модель, которая одновременно видит фото И умеет thinking-режим).
+GROQ_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"  # мультимодальная, бесплатная, видит фото
 
 # Название бренда (используется в текстах)
 BRAND_NAME = "Quiet Mod 👁️"
@@ -577,26 +575,13 @@ def _needs_search(reply: str, user_msg: str) -> bool:
     return False
 
 
-async def _groq_request(messages: list, max_tokens: int = 3072, temperature: float = 0.6) -> Optional[str]:
-    """
-    Базовый запрос к Groq API.
-
-    reasoning_effort="default" включает thinking-режим Qwen 3.6 27B (реальное
-    рассуждение перед ответом — важно для кода и сложных вопросов).
-    reasoning_format="hidden" — модель может "думать" сколько нужно, но в
-    message.content попадает только финальный ответ, без сырых <think>...</think>
-    тегов. Если бы они просочились в content, они бы улетели пользователю прямо
-    в чат (или сломали HTML-парсинг Telegram) — hidden решает это на уровне API,
-    так что парсить/вырезать теги на нашей стороне не нужно.
-    """
+async def _groq_request(messages: list, max_tokens: int = 2048, temperature: float = 0.7) -> Optional[str]:
+    """Базовый запрос к Groq API."""
     payload = {
         "model": GROQ_MODEL,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "top_p": 0.95,
-        "reasoning_effort": "default",
-        "reasoning_format": "hidden",
     }
     try:
         async with aiohttp.ClientSession() as session:
@@ -696,7 +681,7 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
     Отправляет сообщение в Groq.
     Если ИИ не знает ответ — автоматически ищет в DuckDuckGo и отвечает повторно.
     image_base64 — опционально, если пользователь отправил фото.
-    Qwen 3.6 27B понимает изображения нативно и умеет thinking-режим.
+    Llama 4 Scout понимает изображения нативно.
     """
     # Проверяем пасхалки до обращения к API
     egg = _check_easter_egg(user_msg)
@@ -1381,7 +1366,7 @@ async def cb_ai_open(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.edit_text(
         f"◆ <b>ИИ-консьерж</b>\n{LINE}\n"
-        f"Модель: <b>Qwen 3.6 27B · Vision + Thinking</b>\n"
+        f"Модель: <b>Llama 4 Scout · Vision</b>\n"
         f"Лимит: <b>без ограничений</b>\n\n"
         "Спрашивай что угодно — отвечу тихо и быстро ◆",
         reply_markup=kb_ai(),
@@ -2368,7 +2353,7 @@ async def main():
         await bot.send_message(
             ADMIN_ID,
             f"✔ <b>Бот запущен</b> · Quiet Mod 👁️ · SQLite · Railway\n"
-            f"◇ Модель: Qwen 3.6 27B (Vision + Thinking)"
+            f"◇ Модель: Llama 4 Scout (Vision)"
         )
     except Exception:
         pass
