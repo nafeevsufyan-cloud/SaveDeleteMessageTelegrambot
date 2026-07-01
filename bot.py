@@ -541,9 +541,25 @@ async def _get_weather(city: str) -> Optional[str]:
         return None
 
 
+SEARCH_TRIGGERS = [
+    "курс", "цена", "цены", "стоимость", "сколько стоит", "подорожал",
+    "погода", "новости", "новость", "событ",
+    "сегодня", "сейчас", "текущ", "актуальн", "последние", "последняя",
+    "вышел", "вышла", "вышло", "выйдет", "релиз", "анонс", "анонсировал",
+    "обновление", "обновили", "версия",
+    "кто выиграл", "результат", "счёт", "матч", "турнир", "чемпионат",
+    "кто такой", "кто такая", "кто сейчас", "что за", "что такое",
+    "случилось", "произошло", "заявил", "объявил",
+    "жив ли", "умер", "скончался", "существует ли",
+]
+
+
 def _needs_search(reply: str, user_msg: str) -> bool:
     """
     Определяет нужен ли поиск — по ответу ИИ или по характеру вопроса.
+    Используется как ПОСЛЕДНЯЯ подстраховка — после ответа модели,
+    если превентивный поиск не сработал (например, триггер не совпал,
+    а модель сама призналась, что не знает).
     """
     reply_lower = reply.lower()
 
@@ -557,20 +573,30 @@ def _needs_search(reply: str, user_msg: str) -> bool:
         "my knowledge", "i'm not sure", "check online",
     ]
 
-    # Ключевые слова в вопросе пользователя — явно требуют свежих данных
-    search_triggers = [
-        "курс", "цена", "стоимость", "погода", "новости", "сегодня",
-        "сейчас", "последние", "актуальн",
-        "вышел", "выйдет", "релиз", "обновление", "версия",
-        "кто выиграл", "результат", "счёт", "матч",
-    ]
-
     if any(p in reply_lower for p in uncertainty_phrases):
         return True
-    if any(t in user_msg.lower() for t in search_triggers):
+    if any(t in user_msg.lower() for t in SEARCH_TRIGGERS):
         return True
     # Любой год из недавнего диапазона (вместо жёстко зашитых 2024/2025/2026,
     # которые устарели бы сами по себе в 2027) — сигнал, что нужны свежие данные.
+    current_year = date.today().year
+    if re.search(r"\b(20[2-9]\d)\b", user_msg) and any(
+        str(y) in user_msg for y in range(current_year - 2, current_year + 2)
+    ):
+        return True
+    return False
+
+
+def _needs_search_preemptive(user_msg: str) -> bool:
+    """
+    Проверка ДО обращения к модели — по ключевым словам в самом вопросе.
+    Если сработала — ищем сразу и отдаём модели готовый контекст за один
+    запрос, вместо того чтобы сперва получить неуверенный ответ модели,
+    а потом переспрашивать (медленнее и менее надёжно).
+    """
+    t = user_msg.lower()
+    if any(tr in t for tr in SEARCH_TRIGGERS):
+        return True
     current_year = date.today().year
     if re.search(r"\b(20[2-9]\d)\b", user_msg) and any(
         str(y) in user_msg for y in range(current_year - 2, current_year + 2)
@@ -705,7 +731,13 @@ async def _business_edit_ai_html(conn_id: str, chat_id: int, msg_id: int, prefix
 async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None) -> str:
     """
     Отправляет сообщение в Groq.
-    Если ИИ не знает ответ — автоматически ищет в DuckDuckGo и отвечает повторно.
+    Для текстовых вопросов, требующих свежих данных (курсы, новости, релизы,
+    погода и т.п.), поиск в DuckDuckGo запускается ПРЕВЕНТИВНО — до первого
+    обращения к модели — и результаты сразу передаются как контекст.
+    Так .ai работает как единое целое с .search: не нужно гадать, признается
+    ли модель в незнании — если вопрос явно про «сейчас», ответ всегда живой.
+    Фолбэк: если триггер не сработал, а модель всё равно ответила неуверенно —
+    подключаем поиск вторым запросом (как раньше).
     image_base64 — опционально, если пользователь отправил фото.
     Llama 4 Scout понимает изображения нативно.
     """
@@ -736,37 +768,59 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
         ai_history[uid] = history[-10:]
         history = ai_history[uid]
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
     active_model = GROQ_MODEL if image_base64 else GROQ_MODEL_TEXT
+    already_searched = False
 
-    # Первый запрос к ИИ
+    # ═══ Погода — отдельный точный канал, без модели вообще (только текст) ═══
+    if not image_base64 and _is_weather_query(user_msg):
+        city = _extract_city(user_msg)
+        weather_text = await _get_weather(city) if city else None
+        if weather_text:
+            reply = weather_text + "\n\n◐ <i>точные данные о погоде</i>"
+            ai_history[uid].append({"role": "assistant", "content": reply})
+            return reply
+        if city:
+            reply = f"⚠️ Не нашёл город «{city}» — уточни название и спроси ещё раз."
+            ai_history[uid].append({"role": "assistant", "content": reply})
+            return reply
+        # если города в запросе нет вовсе — идём дальше как обычный вопрос
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+
+    # ═══ Превентивный поиск — до запроса к модели ═══
+    if not image_base64 and _needs_search_preemptive(user_msg):
+        log.info(f"🔍 Preemptive search for uid={uid}: {user_msg[:60]}")
+        search_results = await _ddg_search(user_msg)
+        if search_results:
+            messages = messages + [
+                {
+                    "role": "user",
+                    "content": (
+                        f"[Результаты поиска по запросу «{user_msg}»]\n\n"
+                        f"{search_results}\n\n"
+                        "Используй эти данные, если они релевантны вопросу — "
+                        "дай актуальный и точный ответ. Отвечай на языке "
+                        "пользователя, кратко и по делу."
+                    )
+                }
+            ]
+            already_searched = True
+
+    # Первый (или единственный) запрос к ИИ
     reply = await _groq_request(messages, model=active_model)
     if reply is None:
         return "⚠️ ИИ временно недоступен — попробуй позже."
     reply = _normalize_code_blocks(reply)
+    if already_searched:
+        reply += "\n\n◐ <i>ответ дополнен поиском</i>"
 
-    # Проверяем — нужен ли поиск (только для текстовых запросов, не фото)
-    if not image_base64 and _needs_search(reply, user_msg):
-        log.info(f"🔍 Auto-search triggered for uid={uid}: {user_msg[:60]}")
-
-        # Погода — отдельным точным каналом (DDG для погоды бесполезен)
-        if _is_weather_query(user_msg):
-            city = _extract_city(user_msg)
-            weather_text = await _get_weather(city) if city else None
-            if weather_text:
-                reply = weather_text + "\n\n◐ <i>точные данные о погоде</i>"
-                ai_history[uid].append({"role": "assistant", "content": reply})
-                return reply
-            if city:
-                reply = f"⚠️ Не нашёл город «{city}» — уточни название и спроси ещё раз."
-                ai_history[uid].append({"role": "assistant", "content": reply})
-                return reply
-            # если города в запросе нет вовсе — пробуем как обычный поиск ниже
-
+    # ═══ Фолбэк-поиск — только если превентивный не сработал, а модель
+    # всё равно ответила неуверенно (только для текстовых запросов) ═══
+    if not image_base64 and not already_searched and _needs_search(reply, user_msg):
+        log.info(f"🔍 Fallback search triggered for uid={uid}: {user_msg[:60]}")
         search_results = await _ddg_search(user_msg)
 
         if search_results:
-            # Второй запрос с результатами поиска
             augmented_messages = messages + [
                 {"role": "assistant", "content": reply},
                 {
