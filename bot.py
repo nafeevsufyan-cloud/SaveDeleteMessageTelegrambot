@@ -287,10 +287,20 @@ SYSTEM_PROMPT = (
     "Будь дружелюбным и полезным, держи стиль лаконичного люкса.\n\n"
     "ВАЖНО — ФОРМАТИРОВАНИЕ:\n"
     "— НИКОГДА не используй Markdown: никаких **, *, ##, ###, $$, \\(...\\), \\[...\\], _, ` и прочих символов разметки.\n"
-    "— Пиши обычным текстом. Для выделения используй ТОЛЬКО Telegram HTML-теги: <b>жирный</b>, <i>курсив</i>, <code>код</code>.\n"
+    "— Пиши обычным текстом. Для выделения используй ТОЛЬКО Telegram HTML-теги: <b>жирный</b>, <i>курсив</i>.\n"
     "— Математические формулы пиши в читаемом виде, например: sqrt(x^2 + 4) + sqrt(x^2 + 1) = 3 - 5x^2\n"
     "— Списки оформляй через дефис или цифру с точкой, без Markdown-маркеров.\n"
-    "— Никаких LaTeX, никаких $...$ или $$...$$."
+    "— Никаких LaTeX, никаких $...$ или $$...$$.\n\n"
+    "КОД — ОТДЕЛЬНОЕ ПРАВИЛО:\n"
+    "— Если тебя просят написать код (любой фрагмент от одной строки), "
+    "всегда оборачивай его целиком в <pre><code>твой код тут</code></pre> — "
+    "это отдельный блок, Telegram сам даёт пользователю кнопку «скопировать».\n"
+    "— Внутри <pre><code>...</code></pre> код пиши как есть, без экранирования "
+    "и без Markdown-разметки (без ```).\n"
+    "— Короткое имя переменной, команду или путь к файлу внутри обычного текста "
+    "оформляй одиночным <code>тегом</code> — не <pre>.\n"
+    "— Не смешивай <b> или <i> внутри <pre><code>...</code></pre> — блок кода "
+    "должен быть только с <pre><code> и ничем больше."
 )
 
 
@@ -482,6 +492,8 @@ async def _get_weather(city: str) -> Optional[str]:
                     "latitude": loc["latitude"],
                     "longitude": loc["longitude"],
                     "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code",
+                    "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                    "forecast_days": 2,
                     "timezone": "auto",
                 },
                 timeout=aiohttp.ClientTimeout(total=10),
@@ -500,17 +512,25 @@ async def _get_weather(city: str) -> Optional[str]:
         wind  = round(cur["wind_speed_10m"])
         desc  = WEATHER_CODES.get(int(cur.get("weather_code", 0)), "🌡 Погода")
 
-        city_name = loc.get("name", city)
-        country   = loc.get("country", "")
-        loc_label = f"{city_name}, {country}" if country else city_name
-
-        return (
+        result = (
             f"{desc}\n"
-            f"📍 {loc_label}\n"
             f"🌡 Температура: {temp:+d}°C, ощущается как {feels:+d}°C\n"
             f"💧 Влажность: {hum}%\n"
             f"💨 Ветер: {wind} км/ч"
         )
+
+        # Прогноз на завтра (daily.time[1], т.к. [0] — сегодня)
+        daily = wx.get("daily")
+        if daily and len(daily.get("time", [])) > 1:
+            try:
+                t_max = round(daily["temperature_2m_max"][1])
+                t_min = round(daily["temperature_2m_min"][1])
+                t_desc = WEATHER_CODES.get(int(daily["weather_code"][1]), "🌡")
+                result += f"\n\nЗавтра: {t_desc}  {t_min:+d}°..{t_max:+d}°C"
+            except (KeyError, IndexError, TypeError):
+                pass
+
+        return result
     except Exception as e:
         log.warning(f"Open-Meteo weather error: {e}")
         return None
@@ -583,6 +603,69 @@ async def _groq_request(messages: list, max_tokens: int = 2048, temperature: flo
     except Exception as e:
         log.error(f"Groq request: {e}")
         return None
+
+
+# ══════════════════════════════════════════════════════
+#  БЕЗОПАСНАЯ ОТПРАВКА HTML-ОТВЕТА ИИ
+#  Модель по системному промпту сама пишет <b>/<i>/<pre><code> —
+#  их нельзя экранировать html_escape (иначе теги видны как текст).
+#  Но если модель случайно пришлёт кривой HTML (незакрытый тег и т.п.),
+#  Telegram отклонит сообщение целиком с ошибкой "can't parse entities" —
+#  тогда откатываемся на экранированный текст, чтобы ответ всё равно дошёл.
+# ══════════════════════════════════════════════════════
+def _looks_like_bad_html(description: Optional[str]) -> bool:
+    if not description:
+        return False
+    return "can't parse entities" in description.lower()
+
+
+async def _reply_ai_html(msg: Message, prefix: str, answer: str, reply_markup=None, use_reply: bool = False):
+    """
+    Отправляет ответ ИИ сообщением, доверяя HTML-тегам от модели.
+    use_reply=True — через msg.reply (цепочка "в ответ на", как было в группах);
+    use_reply=False — через msg.answer (новое сообщение в тот же чат).
+    При ошибке парсинга HTML — повторяет с экранированным текстом,
+    чтобы пользователь получил хоть что-то, а не тишину.
+    """
+    text = f"{prefix}{answer}" if prefix else answer
+    send = msg.reply if use_reply else msg.answer
+    try:
+        return await send(text, reply_markup=reply_markup)
+    except Exception as e:
+        if "can't parse entities" in str(e).lower() or "parse entities" in str(e).lower():
+            log.warning(f"AI reply bad HTML, falling back to escaped: {e}")
+            fallback = f"{prefix}{html_escape(answer)}" if prefix else html_escape(answer)
+            return await send(fallback, reply_markup=reply_markup)
+        raise
+
+
+async def _edit_ai_html(target_msg: Message, prefix: str, answer: str):
+    """Аналог _reply_ai_html, но для edit_text (когда уже есть 'думаю...' сообщение)."""
+    text = f"{prefix}{answer}" if prefix else answer
+    try:
+        await target_msg.edit_text(text)
+    except Exception as e:
+        if "can't parse entities" in str(e).lower() or "parse entities" in str(e).lower():
+            log.warning(f"AI edit bad HTML, falling back to escaped: {e}")
+            fallback = f"{prefix}{html_escape(answer)}" if prefix else html_escape(answer)
+            await target_msg.edit_text(fallback)
+        else:
+            raise
+
+
+async def _business_edit_ai_html(conn_id: str, chat_id: int, msg_id: int, prefix: str, answer: str) -> bool:
+    """
+    Аналог для бизнес-чата (правка сообщения в чате собеседника через HTTP).
+    _business_edit_message уже логирует description при ошибке — используем
+    его, и при признаке кривого HTML повторяем с экранированным текстом.
+    """
+    text = f"{prefix}{answer}"
+    ok, description = await _business_edit_message_ex(conn_id, chat_id, msg_id, text)
+    if not ok and _looks_like_bad_html(description):
+        log.warning(f"Business AI edit bad HTML, falling back to escaped: {description}")
+        fallback = f"{prefix}{html_escape(answer)}"
+        ok, _ = await _business_edit_message_ex(conn_id, chat_id, msg_id, fallback)
+    return ok
 
 
 async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None) -> str:
@@ -745,10 +828,12 @@ async def cmd_admin(msg: Message):
 
 AI_PREFIX = ".ai"  # команда (без пробела — регистр игнорируется)
 
-async def _business_edit_message(conn_id: str, chat_id: int, msg_id: int, text: str) -> bool:
+async def _business_edit_message_ex(conn_id: str, chat_id: int, msg_id: int, text: str) -> tuple[bool, Optional[str]]:
     """
     Редактирует бизнес-сообщение напрямую через Bot API (HTTP),
     т.к. aiogram 3.7 не поддерживает business_connection_id в edit_message_text.
+    Возвращает (успех, описание_ошибки_от_telegram_если_есть) — описание нужно,
+    чтобы отличить кривой HTML от прочих сбоев (сеть, права и т.п.).
     """
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
     payload = {
@@ -763,12 +848,19 @@ async def _business_edit_message(conn_id: str, chat_id: int, msg_id: int, text: 
             async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 data = await resp.json()
                 if not data.get("ok"):
-                    log.warning(f"editMessageText API error: {data.get('description')}")
-                    return False
-                return True
+                    description = data.get("description")
+                    log.warning(f"editMessageText API error: {description}")
+                    return False, description
+                return True, None
     except Exception as e:
         log.warning(f"editMessageText HTTP: {e}")
-        return False
+        return False, str(e)
+
+
+async def _business_edit_message(conn_id: str, chat_id: int, msg_id: int, text: str) -> bool:
+    """Обёртка над _business_edit_message_ex для мест, где описание ошибки не нужно."""
+    ok, _ = await _business_edit_message_ex(conn_id, chat_id, msg_id, text)
+    return ok
 
 
 @dp.business_message(F.text.regexp(r"(?i)^\.ai\s+.+"))
@@ -818,11 +910,11 @@ async def on_ai_inline(msg: Message):
     # Шаг 3: получаем ответ (с фото или без)
     answer = await groq_chat(owner_id, question or "Опиши что на фото.", image_base64=image_b64)
 
-    # Шаг 4: редактируем → ответ + подпись
-    result_text = f"{html_escape(answer)}\n\n— 👁️ @{BOT_USERNAME}"
-    await _business_edit_message(
+    # Шаг 4: редактируем → ответ + подпись (доверяем HTML-тегам от модели,
+    # с фоллбэком на экранирование, если она пришлёт кривой HTML)
+    await _business_edit_ai_html(
         msg.business_connection_id, msg.chat.id, msg.message_id,
-        result_text
+        prefix="", answer=f"{answer}\n\n— 👁️ @{BOT_USERNAME}"
     )
     log.info(f"🤖 .ai done owner={owner_id} chat={msg.chat.id} with_photo={image_b64 is not None}")
 
@@ -858,11 +950,11 @@ async def on_ai_group(msg: Message):
     answer = await groq_chat(uid, question, image_base64=image_b64)
 
     try:
-        await thinking.edit_text(f"◆ {html_escape(answer)}")
+        await _edit_ai_html(thinking, prefix="◆ ", answer=answer)
     except Exception:
         try:
             await thinking.delete()
-            await msg.reply(f"◆ {html_escape(answer)}")
+            await _reply_ai_html(msg, prefix="◆ ", answer=answer, use_reply=True)
         except Exception as e:
             log.error(f"ai_group reply: {e}")
 
@@ -933,8 +1025,10 @@ async def on_search_inline(msg: Message):
         if not answer:
             answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
 
-    result_text = f"◐ {html_escape(answer)}\n\n— 👁️ @{BOT_USERNAME}"
-    await _business_edit_message(msg.business_connection_id, msg.chat.id, msg.message_id, result_text)
+    await _business_edit_ai_html(
+        msg.business_connection_id, msg.chat.id, msg.message_id,
+        prefix="◐ ", answer=f"{answer}\n\n— 👁️ @{BOT_USERNAME}"
+    )
     log.info(f"🔍 .search done owner={owner_id} query={query[:50]}")
 
 
@@ -984,11 +1078,11 @@ async def on_search_group(msg: Message):
             answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
 
     try:
-        await thinking.edit_text(f"◐ {html_escape(answer)}")
+        await _edit_ai_html(thinking, prefix="◐ ", answer=answer)
     except Exception:
         try:
             await thinking.delete()
-            await msg.reply(f"◐ {html_escape(answer)}")
+            await _reply_ai_html(msg, prefix="◐ ", answer=answer, use_reply=True)
         except Exception as e:
             log.error(f"search_group reply: {e}")
 
@@ -1278,6 +1372,31 @@ async def cb_ai_open(call: CallbackQuery, state: FSMContext):
     )
 
 
+# Кадры "вращения" глаза — те же дуги, что дают эффект спиннера в CLI
+THINKING_FRAMES = ["◜ 👁️ Думаю", "◝ 👁️ Думаю", "◞ 👁️ Думаю", "◟ 👁️ Думаю"]
+THINKING_INTERVAL = 0.4  # сек между кадрами
+
+
+async def _spin_thinking(chat_id: int, message_id: int):
+    """
+    Фоновая анимация «глаз думает» — крутит кадры THINKING_FRAMES,
+    пока задачу не отменят (asyncio.CancelledError) снаружи, когда
+    ответ ИИ готов. Работает в чате с ИИ внутри бота (только там).
+    """
+    i = 0
+    try:
+        while True:
+            frame = THINKING_FRAMES[i % len(THINKING_FRAMES)]
+            try:
+                await bot.edit_message_text(frame, chat_id=chat_id, message_id=message_id)
+            except Exception:
+                pass  # сообщение могли удалить/не изменилось — не критично, продолжаем крутить
+            i += 1
+            await asyncio.sleep(THINKING_INTERVAL)
+    except asyncio.CancelledError:
+        pass  # штатная отмена — ответ ИИ уже готов
+
+
 @dp.message(S.ai_chat)
 async def ai_msg(msg: Message, state: FSMContext):
     uid = msg.from_user.id
@@ -1292,7 +1411,8 @@ async def ai_msg(msg: Message, state: FSMContext):
 
     text_content = msg.text or msg.caption or ""
 
-    thinking = await msg.answer("◆ · · ·")
+    thinking = await msg.answer(THINKING_FRAMES[0])
+    spin_task = asyncio.create_task(_spin_thinking(thinking.chat.id, thinking.message_id))
 
     image_b64 = None
     if has_photo:
@@ -1300,12 +1420,17 @@ async def ai_msg(msg: Message, state: FSMContext):
         file_id = msg.photo[-1].file_id
         image_b64 = await _get_image_base64(bot, file_id)
         if image_b64 is None:
+            spin_task.cancel()
             await thinking.edit_text("◇ Не смог загрузить фото — попробуй ещё раз.")
             return
 
-    reply = await groq_chat(uid, text_content, image_base64=image_b64)
+    try:
+        reply = await groq_chat(uid, text_content, image_base64=image_b64)
+    finally:
+        spin_task.cancel()
+
     await thinking.delete()
-    await msg.answer(f"◆ {html_escape(reply)}", reply_markup=kb_ai())
+    await _reply_ai_html(msg, prefix="◆ ", answer=reply, reply_markup=kb_ai())
 
 
 @dp.callback_query(F.data == "ai_clear")
