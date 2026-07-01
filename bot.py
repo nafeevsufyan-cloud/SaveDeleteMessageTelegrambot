@@ -41,7 +41,8 @@ BOT_TOKEN    = os.environ["BOT_TOKEN"]
 ADMIN_ID     = int(os.environ["ADMIN_ID"])
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BOT_USERNAME = "Quiet_Mod_bot"  # фиксированное имя — не зависит от старой переменной окружения
-GROQ_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"  # мультимодальная, бесплатная, видит фото
+GROQ_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct"  # мультимодальная — нужна для фото
+GROQ_MODEL_TEXT  = "llama-3.3-70b-versatile"  # для текста — стабильнее, без языковых глюков Scout
 
 # Название бренда (используется в текстах)
 BRAND_NAME = "Quiet Mod 👁️"
@@ -285,6 +286,9 @@ def kb_admin() -> InlineKeyboardMarkup:
 SYSTEM_PROMPT = (
     "Ты сдержанный, элегантный ИИ-консьерж внутри Telegram-бота Quiet Mod. "
     "Отвечай чётко, без лишней воды. Язык — язык пользователя. "
+    "СТРОГО: весь ответ должен быть на ОДНОМ языке — языке вопроса пользователя. "
+    "Никогда не вставляй слова или фразы на других языках (вьетнамский, китайский и т.п.), "
+    "даже одно слово — это критическая ошибка.\n\n"
     "Будь дружелюбным и полезным, держи стиль лаконичного люкса.\n\n"
     "ВАЖНО — ФОРМАТИРОВАНИЕ:\n"
     "— НИКОГДА не используй Markdown: никаких **, *, ##, ###, $$, \\(...\\), \\[...\\], _, ` и прочих символов разметки.\n"
@@ -575,10 +579,10 @@ def _needs_search(reply: str, user_msg: str) -> bool:
     return False
 
 
-async def _groq_request(messages: list, max_tokens: int = 2048, temperature: float = 0.7) -> Optional[str]:
+async def _groq_request(messages: list, max_tokens: int = 2048, temperature: float = 0.7, model: str = GROQ_MODEL) -> Optional[str]:
     """Базовый запрос к Groq API."""
     payload = {
-        "model": GROQ_MODEL,
+        "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -733,9 +737,10 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
         history = ai_history[uid]
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+    active_model = GROQ_MODEL if image_base64 else GROQ_MODEL_TEXT
 
     # Первый запрос к ИИ
-    reply = await _groq_request(messages)
+    reply = await _groq_request(messages, model=active_model)
     if reply is None:
         return "⚠️ ИИ временно недоступен — попробуй позже."
     reply = _normalize_code_blocks(reply)
@@ -775,7 +780,7 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
                     )
                 }
             ]
-            reply_with_search = await _groq_request(augmented_messages)
+            reply_with_search = await _groq_request(augmented_messages, model=active_model)
             if reply_with_search:
                 reply = _normalize_code_blocks(reply_with_search) + "\n\n◐ <i>ответ дополнен поиском</i>"
                 log.info(f"🔍 Search augmented reply for uid={uid}")
@@ -1050,7 +1055,7 @@ async def on_search_inline(msg: Message):
         answer = await _groq_request([
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
-        ])
+        ], model=GROQ_MODEL_TEXT)
         if not answer:
             answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
         else:
@@ -1104,7 +1109,7 @@ async def on_search_group(msg: Message):
         answer = await _groq_request([
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
-        ])
+        ], model=GROQ_MODEL_TEXT)
         if not answer:
             answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
         else:
