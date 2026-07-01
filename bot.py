@@ -621,6 +621,28 @@ async def _groq_request(messages: list, max_tokens: int = 2048, temperature: flo
 #  Telegram отклонит сообщение целиком с ошибкой "can't parse entities" —
 #  тогда откатываемся на экранированный текст, чтобы ответ всё равно дошёл.
 # ══════════════════════════════════════════════════════
+def _normalize_code_blocks(text: str) -> str:
+    """
+    Страховка: модель иногда игнорирует системный промпт и всё равно шлёт код
+    в Markdown (```...```) вместо <pre><code>. Конвертируем сами, чтобы
+    Telegram гарантированно показал кнопку «скопировать» вне зависимости
+    от того, как ответила модель.
+    """
+    text = re.sub(
+        r"```(?:\w+)?\n?(.*?)```",
+        lambda m: f"<pre><code>{html_escape(m.group(1))}</code></pre>",
+        text,
+        flags=re.DOTALL,
+    )
+    # одиночные `код` -> <code>код</code>, но не трогаем то, что уже внутри <pre><code>
+    parts = re.split(r"(<pre><code>.*?</code></pre>)", text, flags=re.DOTALL)
+    for i, part in enumerate(parts):
+        if part.startswith("<pre><code>"):
+            continue
+        parts[i] = re.sub(r"`([^`\n]+)`", lambda m: f"<code>{html_escape(m.group(1))}</code>", part)
+    return "".join(parts)
+
+
 def _looks_like_bad_html(description: Optional[str]) -> bool:
     if not description:
         return False
@@ -716,6 +738,7 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
     reply = await _groq_request(messages)
     if reply is None:
         return "⚠️ ИИ временно недоступен — попробуй позже."
+    reply = _normalize_code_blocks(reply)
 
     # Проверяем — нужен ли поиск (только для текстовых запросов, не фото)
     if not image_base64 and _needs_search(reply, user_msg):
@@ -754,7 +777,7 @@ async def groq_chat(uid: int, user_msg: str, image_base64: Optional[str] = None)
             ]
             reply_with_search = await _groq_request(augmented_messages)
             if reply_with_search:
-                reply = reply_with_search + "\n\n◐ <i>ответ дополнен поиском</i>"
+                reply = _normalize_code_blocks(reply_with_search) + "\n\n◐ <i>ответ дополнен поиском</i>"
                 log.info(f"🔍 Search augmented reply for uid={uid}")
 
     # Сохраняем в историю
@@ -1030,6 +1053,8 @@ async def on_search_inline(msg: Message):
         ])
         if not answer:
             answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
+        else:
+            answer = _normalize_code_blocks(answer)
 
     await _business_edit_ai_html(
         msg.business_connection_id, msg.chat.id, msg.message_id,
@@ -1082,6 +1107,8 @@ async def on_search_group(msg: Message):
         ])
         if not answer:
             answer = "⚠️ Не удалось получить результаты поиска — попробуй позже."
+        else:
+            answer = _normalize_code_blocks(answer)
 
     try:
         await _edit_ai_html(thinking, prefix="◐ ", answer=answer)
